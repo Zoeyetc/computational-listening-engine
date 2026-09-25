@@ -1,0 +1,38 @@
+# Computational Listening Engine
+
+A framework for computational listening.
+
+This repository is UI-independent and product-independent. It accepts PCM data and explicit timeline inputs; it does not acquire browser audio or render a presentation.
+
+## Model
+
+- **Signal:** bounded PCM analysis derives amplitude, spectrum, pitch, rhythm, percussion, harmony, tonal center, and structure.
+- **Evidence:** retained frames and diagnostics preserve observations and uncertainty separately from accepted musical capabilities.
+- **Listening:** `ListeningMap` holds the analyzed result; `ListeningSnapshot` resolves current musical truth from an explicit time.
+- **Temporal reasoning:** retained evidence selection and timeline crossings use the supplied musical time without creating a transport clock.
+- **Timeline:** `ListeningTimeline` produces deterministic snapshots and discrete events, including seek and map-replacement behavior.
+- **Streaming:** `RollingListeningSession` analyzes bounded rolling PCM and retains causal evidence.
+- **Diagnostics:** analysis characterization is exposed through the same package API without changing production decisions.
+
+The engine has no React, UI, product, DOM, Web Audio acquisition, permission, or device-selection dependency. Audio acquisition and source metadata belong to the browser audio-source client.
+
+## Consumers
+
+- Zoë — computational listening instrument.
+- Z.land — music-driven physical world.
+
+Both products consume `@computational-listening/engine`; neither owns its implementation.
+
+## Development
+
+Requires Node.js 22.12+ and npm.
+
+```sh
+npm install
+npm run check:boundaries
+npm run typecheck
+npm test
+npm run build
+```
+
+The package publishes one root API. `dist/` contains ESM JavaScript and declarations. The package is versioned independently of its consumers.
