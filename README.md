@@ -50,6 +50,14 @@ npm run build
 
 The package publishes one root API. `dist/` contains ESM JavaScript and declarations. The package is versioned independently of its consumers.
 
+## Evaluation
+
+The independent [Evaluation Suite v0.1](evaluation/README.md) scores pitch, melody,
+rhythm, harmony, and confidence calibration without changing Engine analysis.
+Run `npm run test:evaluation` for metric tests and `npm run benchmark` to generate
+[evaluation-report.md](evaluation-report.md) from deterministic synthetic PCM.
+The evaluation documentation covers metric definitions, its local API, and adding datasets.
+
 ## Package publication
 
 `@zoeyetc/computational-listening-engine` is configured for public publication to the npm
