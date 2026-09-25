@@ -50,6 +50,12 @@ npm run build
 
 The package publishes one root API. `dist/` contains ESM JavaScript and declarations. The package is versioned independently of its consumers.
 
+## Dual-Path Listening v0.1
+
+The opt-in [Dual-Path Listening architecture](docs/architecture/DUAL_PATH_LISTENING_V0.1.md)
+adds an independent Bass Path over existing candidate evidence. It does not change the
+existing Melody path or claim bass accuracy before a ground-truth dataset exists.
+
 ## Evaluation
 
 The independent [Evaluation Suite v0.1](evaluation/README.md) scores pitch, melody,
