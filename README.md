@@ -2,6 +2,19 @@
 
 A framework for computational listening.
 
+## Installation
+
+```sh
+npm install @zoeyetc/computational-listening-engine
+```
+
+```js
+import { hzToMidi, midiToNoteName } from '@zoeyetc/computational-listening-engine';
+
+const midi = hzToMidi(440); // 69
+console.log(midiToNoteName(midi)); // A4
+```
+
 This repository is UI-independent and product-independent. It accepts PCM data and explicit timeline inputs; it does not acquire browser audio or render a presentation.
 
 ## Model
@@ -21,7 +34,7 @@ The engine has no React, UI, product, DOM, Web Audio acquisition, permission, or
 - Zoë — computational listening instrument.
 - Z.land — music-driven physical world.
 
-Both products consume `@computational-listening/engine`; neither owns its implementation.
+Both products consume `@zoeyetc/computational-listening-engine`; neither owns its implementation.
 
 ## Development
 
@@ -36,3 +49,26 @@ npm run build
 ```
 
 The package publishes one root API. `dist/` contains ESM JavaScript and declarations. The package is versioned independently of its consumers.
+
+## Package publication
+
+`@zoeyetc/computational-listening-engine` is configured for public publication to the npm
+registry. Its only exported entry point is the package root, backed by
+`dist/index.js` and `dist/index.d.ts`. The tarball includes `dist/`, this README,
+`LICENSE`, and `package.json`.
+
+Before a release, run:
+
+```sh
+npm test
+npm publish --dry-run
+```
+
+Packing and publishing automatically check source boundaries, typecheck, and
+rebuild `dist/` from scratch. The dry run prepares the package without publishing
+it. Actual publication requires a separate, explicit release step and npm access
+to the `@zoeyetc` scope.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
