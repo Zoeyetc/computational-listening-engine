@@ -17,6 +17,9 @@ for (const config of ['tsconfig.build.json', 'evaluation/tsconfig.build.json']) 
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
+// Feasibility experiments support repository tests and benchmarks only.
+rmSync(join(dist, 'experiments'), { recursive: true, force: true });
+
 // TypeScript rewrites runtime imports but retains .ts paths in declarations.
 // Match the emitted JavaScript paths without changing any exported symbols.
 for (const file of readdirSync(dist, { recursive: true })) {
