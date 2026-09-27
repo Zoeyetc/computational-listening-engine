@@ -28,6 +28,8 @@ export type BrowserLiveStageTimingSink = Readonly<{
 
 export type BrowserLiveStageRecord = Readonly<{
   sequence: number;
+  rollingSessionId: number | null;
+  rollingRunId: number | null;
   completedAtMilliseconds: number;
   stages: Readonly<Record<BrowserLiveStageName, number>>;
   counts: Readonly<{
@@ -95,7 +97,10 @@ function emptyStages(): Record<BrowserLiveStageName, number> {
   return Object.fromEntries(STAGES.map(stage => [stage, 0])) as Record<BrowserLiveStageName, number>;
 }
 
-export function beginBrowserLiveStageProfile(): (BrowserLiveStageTimingSink & Readonly<{
+export function beginBrowserLiveStageProfile(correlation: Readonly<{
+  rollingSessionId: number;
+  rollingRunId: number;
+}> | null = null): (BrowserLiveStageTimingSink & Readonly<{
   finish(): BrowserLiveStageRecord;
 }>) | null {
   if (!enabled) return null;
@@ -113,6 +118,8 @@ export function beginBrowserLiveStageProfile(): (BrowserLiveStageTimingSink & Re
         stages.totalRollingUpdate - stages.deliberateAsyncYieldWait);
       const record: BrowserLiveStageRecord = Object.freeze({
         sequence: sequence += 1,
+        rollingSessionId: correlation?.rollingSessionId ?? null,
+        rollingRunId: correlation?.rollingRunId ?? null,
         completedAtMilliseconds: performance.now(),
         stages: Object.freeze({ ...stages }),
         counts: Object.freeze({ ...counts }),

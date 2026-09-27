@@ -66,6 +66,8 @@ export {
   ROLLING_LISTENING_WINDOW_SECONDS,
 } from './streaming/RollingListeningSession.ts';
 export type {
+  RollingAnalysisDiagnosticRecord,
+  RollingAnalysisDiagnosticsSink,
   RollingListeningDiagnostics,
   RollingListeningSessionOptions,
   RollingListeningUpdate,

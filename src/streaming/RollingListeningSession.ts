@@ -20,10 +20,45 @@ export type RollingListeningDiagnostics = Readonly<{
 export type RollingListeningUpdate = Readonly<{
   map: ListeningMap; time: number; events: readonly ListeningEvent[]; diagnostics: RollingListeningDiagnostics;
 }>;
+export type RollingAnalysisDiagnosticRecord = Readonly<{
+  version: 1;
+  sessionId: number;
+  runId: number;
+  requestId: number;
+  publicationId: number;
+  analyzer: 'built-in-production' | 'custom-override';
+  trigger: 'cadence' | 'manual';
+  eligibility: 'immediate' | 'coalesced';
+  coalescedRequestCount: number;
+  wallClockMilliseconds: Readonly<{
+    requested: number;
+    eligible: number;
+    analysisStarted: number;
+    analysisCompleted: number;
+    updatePrepared: number;
+    updatePublished: number;
+  }>;
+  audioTimeSeconds: Readonly<{
+    sessionAtAnalysisStart: number;
+    sessionAtPublication: number;
+    historyDuration: number;
+    newestIncludedInput: number;
+  }>;
+}>;
+export type RollingAnalysisDiagnosticsSink = (record: RollingAnalysisDiagnosticRecord) => void;
 type AnalyzePcm = (pcm: PcmAudio) => Promise<ListeningMap>;
 export type RollingListeningSessionOptions = Readonly<{
   sampleRate: number; readTime(): number; onUpdate(update: RollingListeningUpdate): void;
-  analyze?: AnalyzePcm; now?: () => number;
+  analyze?: AnalyzePcm; now?: () => number; onDiagnostic?: RollingAnalysisDiagnosticsSink;
+}>;
+
+let nextRollingSessionId = 0;
+
+type AnalysisRequest = Readonly<{
+  requestId: number;
+  requestedAtMilliseconds: number;
+  trigger: 'cadence' | 'manual';
+  coalescedRequestCount: number;
 }>;
 const shiftInterval = <T extends { start: number; end: number }>(item: T, offset: number): T =>
   ({ ...item, start: item.start + offset, end: item.end + offset });
@@ -130,6 +165,8 @@ function downmixRollingBlock(channels: readonly Float32Array[]) {
 }
 
 export function createRollingListeningSession(options: RollingListeningSessionOptions) {
+  const sessionId = nextRollingSessionId += 1;
+  const diagnosticsEnabled = options.onDiagnostic !== undefined;
   const production = options.analyze ? null
     : new RollingAnalysisEngine(options.sampleRate, ROLLING_LISTENING_WINDOW_SECONDS);
   const analyze = options.analyze ?? analyzePcmListeningAsync;
@@ -142,27 +179,57 @@ export function createRollingListeningSession(options: RollingListeningSessionOp
   let stopped = false;
   let lastScheduledAt = Number.NEGATIVE_INFINITY;
   let droppedAnalysisRequests = 0;
+  let nextRequestId = 0;
+  let nextRunId = 0;
+  let pendingRerunRequest: AnalysisRequest | null = null;
 
-  const run = async () => {
+  const createRequest = (trigger: AnalysisRequest['trigger']): AnalysisRequest => Object.freeze({
+    requestId: nextRequestId += 1,
+    requestedAtMilliseconds: diagnosticsEnabled ? performance.now() : 0,
+    trigger,
+    coalescedRequestCount: 0,
+  });
+
+  const deliverDiagnostic = (record: RollingAnalysisDiagnosticRecord) => {
+    if (!options.onDiagnostic) return;
+    try { options.onDiagnostic(record); } catch { /* Diagnostics cannot break listening. */ }
+  };
+
+  const run = async (request: AnalysisRequest) => {
     if (stopped || !buffer.length) return;
-    if (running) { rerunLatest = true; droppedAnalysisRequests += 1; return; }
+    if (running) {
+      rerunLatest = true;
+      droppedAnalysisRequests += 1;
+      pendingRerunRequest = Object.freeze({ ...request,
+        coalescedRequestCount: (pendingRerunRequest?.coalescedRequestCount ?? 0) + 1 });
+      return;
+    }
     running = true;
-    const liveProfile = production ? beginBrowserLiveStageProfile() : null;
+    const runId = nextRunId += 1;
+    const eligibleAtMilliseconds = diagnosticsEnabled ? performance.now() : 0;
+    const liveProfile = production ? beginBrowserLiveStageProfile({
+      rollingSessionId: sessionId,
+      rollingRunId: runId,
+    }) : null;
     const rollingUpdateStarted = liveProfile ? performance.now() : 0;
     const snapshotStarted = liveProfile ? performance.now() : 0;
     const pcm = buffer.snapshot();
     if (liveProfile) liveProfile.add('rollingPcmSnapshotCopy', performance.now() - snapshotStarted);
+    const newestIncludedInput = buffer.totalDuration;
     const observationTime = options.readTime();
     const windowDuration = pcm.length / options.sampleRate;
     const offset = Math.max(0, observationTime - windowDuration);
     const anchoredMelodyOffset = production
-      ? Math.max(0, observationTime - buffer.totalDuration) : null;
+      ? Math.max(0, observationTime - newestIncludedInput) : null;
     const analysisStarted = now();
+    const analysisStartedAtMilliseconds = diagnosticsEnabled ? performance.now() : 0;
+    let publishedDiagnostic: RollingAnalysisDiagnosticRecord | null = null;
     try {
       const analyzed = production
         ? (await production.analyzeSnapshot(
           { sampleRate: options.sampleRate, channels: [pcm] }, liveProfile)).map
         : await analyze({ sampleRate: options.sampleRate, channels: [pcm] });
+      const analysisCompletedAtMilliseconds = diagnosticsEnabled ? performance.now() : 0;
       if (stopped) return;
       const rollingMapStarted = liveProfile ? performance.now() : 0;
       const latestTime = options.readTime();
@@ -184,16 +251,49 @@ export function createRollingListeningSession(options: RollingListeningSessionOp
         retainedEventCount: retainedEvents.length, analysisCadence: ROLLING_LISTENING_CADENCE_SECONDS,
         droppedAnalysisRequests, lastAnalysisLatency: Math.max(0, now() - analysisStarted),
       } };
+      const updatePreparedAtMilliseconds = diagnosticsEnabled ? performance.now() : 0;
       if (liveProfile) {
         liveProfile.add('rollingMapPreparation', performance.now() - rollingMapStarted);
         liveProfile.add('totalRollingUpdate', performance.now() - rollingUpdateStarted);
         liveProfile.finish();
       }
       options.onUpdate(update);
+      const updatePublishedAtMilliseconds = diagnosticsEnabled ? performance.now() : 0;
+      publishedDiagnostic = diagnosticsEnabled ? Object.freeze({
+        version: 1,
+        sessionId,
+        runId,
+        requestId: request.requestId,
+        publicationId: runId,
+        analyzer: production ? 'built-in-production' : 'custom-override',
+        trigger: request.trigger,
+        eligibility: request.coalescedRequestCount ? 'coalesced' : 'immediate',
+        coalescedRequestCount: request.coalescedRequestCount,
+        wallClockMilliseconds: Object.freeze({
+          requested: request.requestedAtMilliseconds,
+          eligible: eligibleAtMilliseconds,
+          analysisStarted: analysisStartedAtMilliseconds,
+          analysisCompleted: analysisCompletedAtMilliseconds,
+          updatePrepared: updatePreparedAtMilliseconds,
+          updatePublished: updatePublishedAtMilliseconds,
+        }),
+        audioTimeSeconds: Object.freeze({
+          sessionAtAnalysisStart: observationTime,
+          sessionAtPublication: latestTime,
+          historyDuration: windowDuration,
+          newestIncludedInput,
+        }),
+      }) : null;
     } finally {
       running = false;
-      if (rerunLatest && !stopped) { rerunLatest = false; void run(); }
+      if (rerunLatest && !stopped) {
+        rerunLatest = false;
+        const rerunRequest = pendingRerunRequest;
+        pendingRerunRequest = null;
+        if (rerunRequest) void run(rerunRequest);
+      }
     }
+    if (publishedDiagnostic) deliverDiagnostic(publishedDiagnostic);
   };
 
   return {
@@ -207,14 +307,15 @@ export function createRollingListeningSession(options: RollingListeningSessionOp
         } else buffer.push(channels);
       } else buffer.push(channels);
       if (buffer.totalDuration - lastScheduledAt >= ROLLING_LISTENING_CADENCE_SECONDS) {
-        lastScheduledAt = buffer.totalDuration; void run();
+        lastScheduledAt = buffer.totalDuration; void run(createRequest('cadence'));
       }
     },
-    analyzeNow: run,
+    analyzeNow: () => run(createRequest('manual')),
     diagnostics: () => ({ capacitySamples: buffer.capacity, bufferedSamples: buffer.length,
       rollingPcmBytes: buffer.byteLength, retainedEventCount: retainedEvents.length, droppedAnalysisRequests }),
     stop() {
-      stopped = true; retainedEvents = []; seenEvents.clear(); buffer.clear(); production?.dispose();
+      stopped = true; pendingRerunRequest = null; retainedEvents = [];
+      seenEvents.clear(); buffer.clear(); production?.dispose();
     },
   };
 }
