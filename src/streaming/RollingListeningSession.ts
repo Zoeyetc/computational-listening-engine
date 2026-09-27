@@ -5,6 +5,7 @@ import type { MelodyEvidenceBuildFrame, MelodyEvidenceTimeline } from '../melody
 import { collectListeningEvents } from '../ListeningTimeline.ts';
 import type { ListeningEvent } from '../listeningTimelineTypes.ts';
 import type { ListeningMap } from '../types.ts';
+import { RollingAnalysisEngine } from './RollingAnalysisEngine.ts';
 import { RollingPcmBuffer } from './RollingPcmBuffer.ts';
 
 export const ROLLING_LISTENING_WINDOW_SECONDS = 12;
@@ -49,16 +50,18 @@ function shiftEvidence(timeline: MelodyEvidenceTimeline | null | undefined, offs
   return createCompactMelodyEvidenceTimeline(frames, timeline.thresholds, timeline.track);
 }
 
-function toRollingMap(map: ListeningMap, offset: number, sessionTime: number): ListeningMap {
+export function mapRollingListeningResult(map: ListeningMap, offset: number, sessionTime: number,
+  anchoredMelodyOffset: number | null = null): ListeningMap {
   const elapsed = sessionTime;
+  const melodyOffset = anchoredMelodyOffset ?? offset;
   const melodyReady = elapsed >= 2;
   const rhythmReady = elapsed >= 4;
   const percussionReady = elapsed >= 0.3;
   const harmonyReady = elapsed >= 2;
   const tonalReady = elapsed >= 8;
   const melodyAnalysis = map.melodyAnalysis ? { ...map.melodyAnalysis,
-    contour: map.melodyAnalysis.contour.map(frame => ({ ...frame, time: frame.time + offset })),
-    notes: map.melodyAnalysis.notes.map(note => shiftInterval(note, offset)) } : null;
+    contour: map.melodyAnalysis.contour.map(frame => ({ ...frame, time: frame.time + melodyOffset })),
+    notes: map.melodyAnalysis.notes.map(note => shiftInterval(note, melodyOffset)) } : null;
   const percussionAnalysis = map.percussionAnalysis ? { ...map.percussionAnalysis,
     events: map.percussionAnalysis.events.map(hit => ({ ...hit, time: hit.time + offset })) } : null;
   const rhythmAnalysis = map.rhythmAnalysis ? { ...map.rhythmAnalysis,
@@ -88,7 +91,7 @@ function toRollingMap(map: ListeningMap, offset: number, sessionTime: number): L
     spectrum: map.spectrum?.map(item => shiftInterval(item, offset)) ?? [],
     melody: capabilities.melody ? melodyAnalysis?.notes ?? [] : null,
     melodyAnalysis,
-    melodyEvidence: shiftEvidence(map.melodyEvidence, offset),
+    melodyEvidence: shiftEvidence(map.melodyEvidence, melodyOffset),
     percussion: capabilities.percussion ? percussionAnalysis?.events ?? [] : null,
     percussionAnalysis,
     rhythm: capabilities.rhythm ? map.rhythm?.map(item => shiftInterval(item, offset)) ?? [] : null,
@@ -113,7 +116,21 @@ const eventsFrom = (map: ListeningMap): ListeningEvent[] => collectListeningEven
   noteOffFirstAtSameTime: false,
 });
 
+function downmixRollingBlock(channels: readonly Float32Array[]) {
+  if (!channels.length) return new Float32Array();
+  const length = Math.min(...channels.map(channel => channel.length));
+  const mono = new Float32Array(length);
+  for (let index = 0; index < length; index += 1) {
+    let sample = 0;
+    for (const channel of channels) sample += (channel[index] ?? 0) / channels.length;
+    mono[index] = sample;
+  }
+  return mono;
+}
+
 export function createRollingListeningSession(options: RollingListeningSessionOptions) {
+  const production = options.analyze ? null
+    : new RollingAnalysisEngine(options.sampleRate, ROLLING_LISTENING_WINDOW_SECONDS);
   const analyze = options.analyze ?? analyzePcmListeningAsync;
   const now = options.now ?? (() => performance.now() / 1000);
   const buffer = new RollingPcmBuffer(options.sampleRate, ROLLING_LISTENING_WINDOW_SECONDS);
@@ -133,12 +150,16 @@ export function createRollingListeningSession(options: RollingListeningSessionOp
     const observationTime = options.readTime();
     const windowDuration = pcm.length / options.sampleRate;
     const offset = Math.max(0, observationTime - windowDuration);
+    const anchoredMelodyOffset = production
+      ? Math.max(0, observationTime - buffer.totalDuration) : null;
     const analysisStarted = now();
     try {
-      const analyzed = await analyze({ sampleRate: options.sampleRate, channels: [pcm] });
+      const analyzed = production
+        ? (await production.analyzeSnapshot({ sampleRate: options.sampleRate, channels: [pcm] })).map
+        : await analyze({ sampleRate: options.sampleRate, channels: [pcm] });
       if (stopped) return;
       const latestTime = options.readTime();
-      const map = toRollingMap(analyzed, offset, latestTime);
+      const map = mapRollingListeningResult(analyzed, offset, latestTime, anchoredMelodyOffset);
       const cutoff = Math.max(0, latestTime - ROLLING_LISTENING_WINDOW_SECONDS);
       for (const [key, time] of seenEvents) if (time < cutoff) seenEvents.delete(key);
       const fresh = eventsFrom(map).filter(event => {
@@ -149,7 +170,8 @@ export function createRollingListeningSession(options: RollingListeningSessionOp
       retainedEvents = [...retainedEvents, ...fresh].slice(-ROLLING_LISTENING_EVENT_CAP);
       const evidenceBytes = (map.melodyEvidence?.byteLength ?? 0)
         + (map.amplitude?.length ?? 0) * 64 + (map.spectrum?.length ?? 0) * 80
-        + (map.harmonyAnalysis?.frames.length ?? 0) * 160 + (map.tonalCenterAnalysis?.frames.length ?? 0) * 192;
+        + (map.harmonyAnalysis?.frames.length ?? 0) * 160 + (map.tonalCenterAnalysis?.frames.length ?? 0) * 192
+        + (production?.diagnostics().estimatedNumericPayloadBytes ?? 0);
       options.onUpdate({ map, time: latestTime, events: fresh, diagnostics: {
         rollingPcmBytes: buffer.byteLength, retainedEvidenceBytes: evidenceBytes,
         retainedEventCount: retainedEvents.length, analysisCadence: ROLLING_LISTENING_CADENCE_SECONDS,
@@ -164,7 +186,13 @@ export function createRollingListeningSession(options: RollingListeningSessionOp
   return {
     push(channels: readonly Float32Array[]) {
       if (stopped) return;
-      buffer.push(channels);
+      if (production) {
+        const mono = downmixRollingBlock(channels);
+        if (mono.length) {
+          buffer.push([mono]);
+          production.pushMono(mono);
+        } else buffer.push(channels);
+      } else buffer.push(channels);
       if (buffer.totalDuration - lastScheduledAt >= ROLLING_LISTENING_CADENCE_SECONDS) {
         lastScheduledAt = buffer.totalDuration; void run();
       }
@@ -172,6 +200,8 @@ export function createRollingListeningSession(options: RollingListeningSessionOp
     analyzeNow: run,
     diagnostics: () => ({ capacitySamples: buffer.capacity, bufferedSamples: buffer.length,
       rollingPcmBytes: buffer.byteLength, retainedEventCount: retainedEvents.length, droppedAnalysisRequests }),
-    stop() { stopped = true; retainedEvents = []; seenEvents.clear(); buffer.clear(); },
+    stop() {
+      stopped = true; retainedEvents = []; seenEvents.clear(); buffer.clear(); production?.dispose();
+    },
   };
 }

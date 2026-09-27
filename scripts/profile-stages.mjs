@@ -25,8 +25,8 @@ function instrument(relative, transform) {
 instrument('analysis/AudioAnalysis.ts', original => {
   let source = original;
   source = replaceOnce(source,
-    'function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio): ListeningMap {\n',
-    'function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio): ListeningMap {\n  const __p = globalThis.__CLE_STAGE_PROFILE__;\n  const __prepStart = performance.now();\n', 'finalize entry');
+    'function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,\n  melodyOverride: MelodyAnalysisWithEvidence | null = null): ListeningMap {\n',
+    'function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,\n  melodyOverride: MelodyAnalysisWithEvidence | null = null): ListeningMap {\n  const __p = globalThis.__CLE_STAGE_PROFILE__;\n  const __prepStart = performance.now();\n', 'finalize entry');
   source = replaceOnce(source,
     '  const rhythmAnalysis = analyzeRhythm(\n',
     "  __p.add('general_map_preparation', performance.now() - __prepStart);\n  const rhythmAnalysis = __p.time('rhythm', () => analyzeRhythm(\n", 'rhythm entry');
@@ -37,8 +37,8 @@ instrument('analysis/AudioAnalysis.ts', original => {
     '  })), duration, pcm.sampleRate, REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate);\n  const rhythm: RhythmSection[] | null',
     '  })), duration, pcm.sampleRate, REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate));\n  const rhythm: RhythmSection[] | null', 'percussion exit');
   source = replaceOnce(source,
-    '  const melodyResult = analyzeMelodyWithEvidence({ mono, sampleRate: pcm.sampleRate });',
-    "  const melodyResult = __p.time('melody_total', () => analyzeMelodyWithEvidence({ mono, sampleRate: pcm.sampleRate }));", 'melody');
+    '  const melodyResult = melodyOverride ?? analyzeMelodyWithEvidence({ mono, sampleRate: pcm.sampleRate });',
+    "  const melodyResult = melodyOverride ?? __p.time('melody_total', () => analyzeMelodyWithEvidence({ mono, sampleRate: pcm.sampleRate }));", 'melody');
   source = replaceOnce(source,
     '  const harmonyAnalysis = analyzeHarmony({ mono, sampleRate: pcm.sampleRate });',
     "  const harmonyAnalysis = __p.time('harmony', () => analyzeHarmony({ mono, sampleRate: pcm.sampleRate }));", 'harmony');
@@ -57,7 +57,7 @@ instrument('analysis/AudioAnalysis.ts', original => {
   source = replaceOnce(source,
     '    analysis: metadata,\n  };\n}\n\nfunction validatePcm',
     "    analysis: metadata,\n  };\n  __p.add('final_map_assembly', performance.now() - __finalStart);\n  return __result;\n}\n\nfunction validatePcm", 'final map exit');
-  const asyncAnchor = 'export async function analyzePcmListeningAsync(pcm: PcmAudio): Promise<ListeningMap> {';
+  const asyncAnchor = 'async function analyzePcmListeningAsyncInternal(pcm: PcmAudio,';
   const split = source.indexOf(asyncAnchor);
   if (split < 0) throw new Error('Missing async analysis entry');
   let asynchronous = source.slice(split);
@@ -71,8 +71,8 @@ instrument('analysis/AudioAnalysis.ts', original => {
     '    if (index % 24 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));',
     "    if (index % 24 === 0) {\n      const __yieldStart = performance.now();\n      await new Promise<void>(resolve => setTimeout(resolve, 0));\n      const __elapsed = performance.now() - __yieldStart;\n      __yieldWall += __elapsed;\n      globalThis.__CLE_STAGE_PROFILE__.add('async_yield_wall', __elapsed);\n      globalThis.__CLE_STAGE_PROFILE__.count('async_yield_count');\n    }", 'async yield');
   asynchronous = replaceOnce(asynchronous,
-    '  return finalize(frames, mono, pcm);',
-    "  globalThis.__CLE_STAGE_PROFILE__.add('pcm_general_frames', performance.now() - __frameStart - __yieldWall);\n  return finalize(frames, mono, pcm);", 'frame loop exit');
+    '  return finalize(frames, mono, pcm, melodyOverride);',
+    "  globalThis.__CLE_STAGE_PROFILE__.add('pcm_general_frames', performance.now() - __frameStart - __yieldWall);\n  return finalize(frames, mono, pcm, melodyOverride);", 'frame loop exit');
   return source.slice(0, split) + asynchronous;
 });
 
@@ -86,6 +86,9 @@ instrument('analysis/MelodyAnalysis.ts', original => {
   source = replaceOnce(source,
     '  const frames = candidateFrames(signal, collectDpDiagnostics);',
     "  const frames = __p.time('melody_candidates', () => candidateFrames(signal, collectDpDiagnostics));", 'Melody candidates');
+  source = replaceOnce(source,
+    'function finalizeMelodyAnalysis(frames: readonly AnalyzedFrame[], duration: number, collectEvidence: boolean,\n  collectDpDiagnostics: boolean, localObjectiveVariant: MelodyLocalObjectiveVariant,\n  ambiguityPenalty: MelodySubharmonicAmbiguityPenalty | null) {',
+    "function finalizeMelodyAnalysis(frames: readonly AnalyzedFrame[], duration: number, collectEvidence: boolean,\n  collectDpDiagnostics: boolean, localObjectiveVariant: MelodyLocalObjectiveVariant,\n  ambiguityPenalty: MelodySubharmonicAmbiguityPenalty | null) {\n  const __p = globalThis.__CLE_STAGE_PROFILE__;", 'Melody finalizer entry');
   source = replaceOnce(source,
     '  const pathResult = choosePath(frames, collectDpDiagnostics, localObjectiveVariant, ambiguityPenalty);',
     "  const pathResult = __p.time('melody_path', () => choosePath(frames, collectDpDiagnostics, localObjectiveVariant, ambiguityPenalty));", 'Melody path');

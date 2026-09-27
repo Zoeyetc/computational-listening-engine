@@ -46,7 +46,13 @@ export * from './analysis/RhythmAnalysis.ts';
 export * from './analysis/PercussionAnalysis.ts';
 export * from './analysis/TonalCenterAnalysis.ts';
 export * from './analysis/StructureAnalysis.ts';
-export * from './analysis/AudioAnalysis.ts';
+export {
+  REAL_AUDIO_ANALYSIS,
+  analyzePcmListening,
+  analyzePcmListeningAsync,
+  downmixToMono,
+  type PcmAudio,
+} from './analysis/AudioAnalysis.ts';
 export * from './melody-evidence/compactTimeline.ts';
 export * from './melody-evidence/selectMelodyEvidence.ts';
 export { collectListeningEvents, createListeningTimeline, lookupListeningSnapshot } from './ListeningTimeline.ts';

@@ -6,7 +6,7 @@ import type {
   SpectrumRegion,
 } from '../types.ts';
 import { analyzeRhythm } from './RhythmAnalysis.ts';
-import { analyzeMelodyWithEvidence } from './MelodyAnalysis.ts';
+import { analyzeMelodyWithEvidence, type MelodyAnalysisWithEvidence } from './MelodyAnalysis.ts';
 import { analyzeHarmony } from './HarmonyAnalysis.ts';
 import { analyzeTonalCenter } from './TonalCenterAnalysis.ts';
 import { analyzeStructure } from './StructureAnalysis.ts';
@@ -188,7 +188,8 @@ function* frameGenerator(mono: Float32Array, sampleRate: number): Generator<RawF
     previousMagnitude = magnitude;
   }
 }
-function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio): ListeningMap {
+function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,
+  melodyOverride: MelodyAnalysisWithEvidence | null = null): ListeningMap {
   const duration = Math.min(...pcm.channels.map(channel => channel.length)) / pcm.sampleRate;
   const rmsReference = percentile95(frames.map(frame => frame.rms));
   const bandReference = percentile95(frames.flatMap(frame => [frame.low, frame.mid, frame.high]));
@@ -247,7 +248,7 @@ function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio): Listen
     ? [{ id: 'real-rhythm', start: 0, end: duration, bpm: rhythmAnalysis.bpm,
       beatsPerBar: null, groove: rhythmAnalysis.groove, swing: rhythmAnalysis.swing }]
     : null;
-  const melodyResult = analyzeMelodyWithEvidence({ mono, sampleRate: pcm.sampleRate });
+  const melodyResult = melodyOverride ?? analyzeMelodyWithEvidence({ mono, sampleRate: pcm.sampleRate });
   const melodyAnalysis = melodyResult.analysis;
   const melody = melodyAnalysis.available ? melodyAnalysis.notes : null;
   const harmonyAnalysis = analyzeHarmony({ mono, sampleRate: pcm.sampleRate });
@@ -296,7 +297,8 @@ export function analyzePcmListening(pcm: PcmAudio): ListeningMap {
   return finalize([...frameGenerator(mono, pcm.sampleRate)], mono, pcm);
 }
 
-export async function analyzePcmListeningAsync(pcm: PcmAudio): Promise<ListeningMap> {
+async function analyzePcmListeningAsyncInternal(pcm: PcmAudio,
+  melodyOverride: MelodyAnalysisWithEvidence | null): Promise<ListeningMap> {
   validatePcm(pcm);
   const mono = downmixToMono(pcm.channels);
   const frames: RawFrame[] = [];
@@ -306,5 +308,15 @@ export async function analyzePcmListeningAsync(pcm: PcmAudio): Promise<Listening
     index += 1;
     if (index % 24 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
   }
-  return finalize(frames, mono, pcm);
+  return finalize(frames, mono, pcm, melodyOverride);
+}
+
+export async function analyzePcmListeningAsync(pcm: PcmAudio): Promise<ListeningMap> {
+  return analyzePcmListeningAsyncInternal(pcm, null);
+}
+
+/** Internal rolling composition seam; intentionally omitted from the package root. */
+export function analyzePcmListeningAsyncWithMelody(pcm: PcmAudio,
+  melody: MelodyAnalysisWithEvidence): Promise<ListeningMap> {
+  return analyzePcmListeningAsyncInternal(pcm, melody);
 }
