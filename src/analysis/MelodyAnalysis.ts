@@ -32,7 +32,7 @@ export type MelodyAnalysisInput = Readonly<{
   sampleRate: number;
 }>;
 
-type Candidate = {
+export type MelodyAcousticCandidate = {
   pitchHz: number;
   midiFloat: number;
   periodicity: number;
@@ -41,17 +41,20 @@ type Candidate = {
   scoreDiagnostic: MelodyCandidateScoreDiagnostic | null;
 };
 
-type AnalyzedFrame = {
+export type MelodyAcousticFrame = {
   time: number;
   rms: number;
-  candidates: Candidate[];
+  candidates: readonly MelodyAcousticCandidate[];
   generation: MelodyCandidateGenerationEvidence;
   outOfRangeCandidateCount: number;
   rejectedCandidates: readonly Omit<MelodyRejectedCandidate, 'rank'>[];
 };
 
+type Candidate = MelodyAcousticCandidate;
+type AnalyzedFrame = MelodyAcousticFrame;
+
 type PathState = {
-  candidate: Candidate | null;
+  candidate: MelodyAcousticCandidate | null;
   score: number;
   previous: number;
 };
@@ -273,10 +276,8 @@ function scoreCandidate(integerLag: number, interpolatedLag: number, domain: Yin
   return { pitchHz, midiFloat, periodicity, salience: salienceTerms.salience, score, scoreDiagnostic };
 }
 
-function candidateFrames(signal: Float32Array, collectScoreDiagnostics: boolean): AnalyzedFrame[] {
-  const frames: AnalyzedFrame[] = [];
-  for (let start = 0; start < signal.length; start += MELODY_ANALYSIS.hopSize) {
-    const { frame, rms } = analysisFrame(signal, start);
+function acousticFrame(frame: Float32Array, rms: number, time: number,
+  collectScoreDiagnostics: boolean): AnalyzedFrame {
     // Periodicity needs the long frame, while voicing boundaries use a short
     // center window so rests are not smeared by the 171 ms pitch aperture.
     const candidates: Candidate[] = [];
@@ -339,18 +340,45 @@ function candidateFrames(signal: Float32Array, collectScoreDiagnostics: boolean)
       inRangeCandidateCountBeforeDeduplication,
       duplicateCandidateRemovalCount,
     };
-    frames.push({
-      time: Math.min(signal.length / MELODY_ANALYSIS.analysisSampleRate,
-        (start + MELODY_ANALYSIS.frameSize / 2) / MELODY_ANALYSIS.analysisSampleRate),
+    return {
+      time,
       rms,
       candidates,
       generation,
       outOfRangeCandidateCount,
       rejectedCandidates,
-    });
+    };
+}
+
+/** Internal experimental seam: analyze one complete 12 kHz frame with existing acoustic semantics. */
+export function analyzeMelodyAcousticFrame(frame: Float32Array, time: number,
+  collectScoreDiagnostics = false): MelodyAcousticFrame {
+  if (frame.length !== MELODY_ANALYSIS.frameSize) {
+    throw new RangeError(`Melody acoustic frame must contain ${MELODY_ANALYSIS.frameSize} samples`);
+  }
+  if (!Number.isFinite(time) || time < 0) throw new RangeError('Melody acoustic frame time must be non-negative');
+  const centerStart = Math.floor((frame.length - 512) / 2);
+  let sumSquares = 0;
+  for (let index = centerStart; index < centerStart + 512; index += 1) {
+    sumSquares += frame[index] * frame[index];
+  }
+  return acousticFrame(frame, Math.sqrt(sumSquares / 512), time, collectScoreDiagnostics);
+}
+
+function candidateFrames(signal: Float32Array, collectScoreDiagnostics: boolean): AnalyzedFrame[] {
+  const frames: AnalyzedFrame[] = [];
+  for (let start = 0; start < signal.length; start += MELODY_ANALYSIS.hopSize) {
+    const { frame, rms } = analysisFrame(signal, start);
+    frames.push(acousticFrame(frame, rms, Math.min(signal.length / MELODY_ANALYSIS.analysisSampleRate,
+      (start + MELODY_ANALYSIS.frameSize / 2) / MELODY_ANALYSIS.analysisSampleRate), collectScoreDiagnostics));
     if (start + MELODY_ANALYSIS.frameSize >= signal.length && start > 0) break;
   }
   return frames;
+}
+
+/** Internal experimental seam. Production entry points continue to own resampling and frame alignment. */
+export function extractMelodyAcousticFrames(input: MelodyAnalysisInput): readonly MelodyAcousticFrame[] {
+  return candidateFrames(resampleForAnalysis(input.mono, input.sampleRate), false);
 }
 
 /** Explicit test/debug seam. Full lag curves are never retained by normal analysis or ListeningMap. */
@@ -802,6 +830,13 @@ function runMelodyAnalysis(input: MelodyAnalysisInput, collectEvidence: boolean,
   const signal = resampleForAnalysis(input.mono, input.sampleRate);
   const duration = input.mono.length / input.sampleRate;
   const frames = candidateFrames(signal, collectDpDiagnostics);
+  return finalizeMelodyAnalysis(frames, duration, collectEvidence, collectDpDiagnostics,
+    localObjectiveVariant, ambiguityPenalty);
+}
+
+function finalizeMelodyAnalysis(frames: readonly AnalyzedFrame[], duration: number, collectEvidence: boolean,
+  collectDpDiagnostics: boolean, localObjectiveVariant: MelodyLocalObjectiveVariant,
+  ambiguityPenalty: MelodySubharmonicAmbiguityPenalty | null) {
   const pathResult = choosePath(frames, collectDpDiagnostics, localObjectiveVariant, ambiguityPenalty);
   const path = pathResult.path;
   const contourResult = contourFromPath(frames, path);
@@ -902,4 +937,12 @@ function runMelodyAnalysis(input: MelodyAnalysisInput, collectEvidence: boolean,
     reasons: trackReasons,
   });
   return { analysis, evidence, dpDiagnostics: pathResult.diagnostics };
+}
+
+/** Internal experimental seam: rerun existing temporal interpretation over retained raw acoustic frames. */
+export function interpretMelodyAcousticFrames(frames: readonly MelodyAcousticFrame[], duration: number):
+  MelodyAnalysisWithEvidence {
+  if (!Number.isFinite(duration) || duration < 0) throw new RangeError('Melody duration must be non-negative');
+  const result = finalizeMelodyAnalysis(frames, duration, true, false, 'BASELINE', null);
+  return { analysis: result.analysis, evidence: result.evidence! };
 }

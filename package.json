@@ -34,7 +34,8 @@
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "test:evaluation": "node --test tests/Evaluation*.test.ts",
     "benchmark": "node scripts/evaluation-benchmark.mjs",
-    "profile:stages": "node scripts/profile-stages.mjs"
+    "profile:stages": "node scripts/profile-stages.mjs",
+    "profile:session-acoustic": "node scripts/profile-session-anchored-melody.mjs"
   },
   "devDependencies": {
     "typescript": "~5.9.2"
