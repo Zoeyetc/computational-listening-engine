@@ -22,59 +22,10 @@ function instrument(relative, transform) {
   writeFileSync(path, transform(readFileSync(path, 'utf8')));
 }
 
-instrument('analysis/AudioAnalysis.ts', original => {
-  let source = original;
-  source = replaceOnce(source,
-    'function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,\n  melodyOverride: MelodyAnalysisWithEvidence | null = null): ListeningMap {\n',
-    'function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,\n  melodyOverride: MelodyAnalysisWithEvidence | null = null): ListeningMap {\n  const __p = globalThis.__CLE_STAGE_PROFILE__;\n  const __prepStart = performance.now();\n', 'finalize entry');
-  source = replaceOnce(source,
-    '  const rhythmAnalysis = analyzeRhythm(\n',
-    "  __p.add('general_map_preparation', performance.now() - __prepStart);\n  const rhythmAnalysis = __p.time('rhythm', () => analyzeRhythm(\n", 'rhythm entry');
-  source = replaceOnce(source,
-    '    REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate,\n  );\n  const percussionAnalysis = analyzePercussion(',
-    "    REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate,\n  ));\n  const percussionAnalysis = __p.time('percussion', () => analyzePercussion(", 'rhythm exit and percussion entry');
-  source = replaceOnce(source,
-    '  })), duration, pcm.sampleRate, REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate);\n  const rhythm: RhythmSection[] | null',
-    '  })), duration, pcm.sampleRate, REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate));\n  const rhythm: RhythmSection[] | null', 'percussion exit');
-  source = replaceOnce(source,
-    '  const melodyResult = melodyOverride ?? analyzeMelodyWithEvidence({ mono, sampleRate: pcm.sampleRate });',
-    "  const melodyResult = melodyOverride ?? __p.time('melody_total', () => analyzeMelodyWithEvidence({ mono, sampleRate: pcm.sampleRate }));", 'melody');
-  source = replaceOnce(source,
-    '  const harmonyAnalysis = analyzeHarmony({ mono, sampleRate: pcm.sampleRate });',
-    "  const harmonyAnalysis = __p.time('harmony', () => analyzeHarmony({ mono, sampleRate: pcm.sampleRate }));", 'harmony');
-  source = replaceOnce(source,
-    '  const tonalCenterAnalysis = analyzeTonalCenter(harmonyAnalysis, duration);',
-    "  const tonalCenterAnalysis = __p.time('tonal_center', () => analyzeTonalCenter(harmonyAnalysis, duration));", 'tonal center');
-  source = replaceOnce(source,
-    '  const structuralFrames = normalized.map(frame => {',
-    "  const structureAnalysis = __p.time('structure', () => {\n  const structuralFrames = normalized.map(frame => {", 'structure preparation');
-  source = replaceOnce(source,
-    '  const structureAnalysis = analyzeStructure(\n    structuralFrames, duration, rhythmAnalysis.available ? rhythmAnalysis.beats : null,\n  );\n  const metadata:',
-    '  return analyzeStructure(\n    structuralFrames, duration, rhythmAnalysis.available ? rhythmAnalysis.beats : null,\n  );\n  });\n  const __finalStart = performance.now();\n  const metadata:', 'structure exit');
-  source = replaceOnce(source,
-    '  return {\n    version: 1, duration,\n',
-    '  const __result = {\n    version: 1, duration,\n', 'final map entry');
-  source = replaceOnce(source,
-    '    analysis: metadata,\n  };\n}\n\nfunction validatePcm',
-    "    analysis: metadata,\n  };\n  __p.add('final_map_assembly', performance.now() - __finalStart);\n  return __result;\n}\n\nfunction validatePcm", 'final map exit');
-  const asyncAnchor = 'async function analyzePcmListeningAsyncInternal(pcm: PcmAudio,';
-  const split = source.indexOf(asyncAnchor);
-  if (split < 0) throw new Error('Missing async analysis entry');
-  let asynchronous = source.slice(split);
-  asynchronous = replaceOnce(asynchronous,
-    '  const mono = downmixToMono(pcm.channels);',
-    "  const mono = globalThis.__CLE_STAGE_PROFILE__.time('pcm_downmix', () => downmixToMono(pcm.channels));", 'async downmix');
-  asynchronous = replaceOnce(asynchronous,
-    '  const frames: RawFrame[] = [];',
-    '  const frames: RawFrame[] = [];\n  const __frameStart = performance.now();\n  let __yieldWall = 0;', 'frame loop entry');
-  asynchronous = replaceOnce(asynchronous,
-    '    if (index % 24 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));',
-    "    if (index % 24 === 0) {\n      const __yieldStart = performance.now();\n      await new Promise<void>(resolve => setTimeout(resolve, 0));\n      const __elapsed = performance.now() - __yieldStart;\n      __yieldWall += __elapsed;\n      globalThis.__CLE_STAGE_PROFILE__.add('async_yield_wall', __elapsed);\n      globalThis.__CLE_STAGE_PROFILE__.count('async_yield_count');\n    }", 'async yield');
-  asynchronous = replaceOnce(asynchronous,
-    '  return finalize(frames, mono, pcm, melodyOverride);',
-    "  globalThis.__CLE_STAGE_PROFILE__.add('pcm_general_frames', performance.now() - __frameStart - __yieldWall);\n  return finalize(frames, mono, pcm, melodyOverride);", 'frame loop exit');
-  return source.slice(0, split) + asynchronous;
-});
+instrument('analysis/AudioAnalysis.ts', original => replaceOnce(original,
+  'export async function analyzePcmListeningAsync(pcm: PcmAudio): Promise<ListeningMap> {\n  return analyzePcmListeningAsyncInternal(pcm, null);\n}',
+  'export async function analyzePcmListeningAsync(pcm: PcmAudio): Promise<ListeningMap> {\n  return analyzePcmListeningAsyncInternal(pcm, null, globalThis.__CLE_STAGE_PROFILE__);\n}',
+  'async analysis timing sink'));
 
 instrument('analysis/MelodyAnalysis.ts', original => {
   const split = original.indexOf('function runMelodyAnalysis(');
@@ -110,6 +61,7 @@ instrument('analysis/MelodyAnalysis.ts', original => {
 const measurements = new Map();
 globalThis.__CLE_STAGE_PROFILE__ = {
   add(name, elapsed) { measurements.set(name, (measurements.get(name) ?? 0) + elapsed); },
+  addCount(name, amount) { measurements.set(name, (measurements.get(name) ?? 0) + amount); },
   count(name) { measurements.set(name, (measurements.get(name) ?? 0) + 1); },
   time(name, run) {
     const start = performance.now();
@@ -159,9 +111,9 @@ for (let repetition = 0; repetition < repetitions; repetition += 1) {
     const { map, wall, stages } = await run(pcm);
     const melodyPieces = ['melody_resampling', 'melody_candidates', 'melody_path',
       'melody_contour', 'melody_notes', 'melody_evidence_packing'];
-    const nonOverlapping = ['pcm_downmix', 'pcm_general_frames', 'general_map_preparation',
-      'rhythm', 'percussion', 'melody_total', 'harmony', 'tonal_center', 'structure', 'final_map_assembly'];
-    stages.compute_total = wall - (stages.async_yield_wall ?? 0);
+    const nonOverlapping = ['generalFrameFftFeatures', 'generalMapPreparation',
+      'rhythm', 'percussion', 'melody_total', 'harmony', 'tonalCenter', 'structure', 'finalMapAssembly'];
+    stages.compute_total = wall - (stages.deliberateAsyncYieldWait ?? 0);
     stages.melody_other = stages.melody_total - melodyPieces.reduce((sum, name) => sum + (stages[name] ?? 0), 0);
     stages.melody_temporal = stages.melody_total - stages.melody_resampling
       - stages.melody_candidates - stages.melody_evidence_packing;

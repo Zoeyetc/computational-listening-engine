@@ -11,6 +11,10 @@ import { analyzeHarmony } from './HarmonyAnalysis.ts';
 import { analyzeTonalCenter } from './TonalCenterAnalysis.ts';
 import { analyzeStructure } from './StructureAnalysis.ts';
 import { analyzePercussion } from './PercussionAnalysis.ts';
+import type {
+  BrowserLiveStageName,
+  BrowserLiveStageTimingSink,
+} from '../profiling/BrowserLiveStageProfile.ts';
 
 export const REAL_AUDIO_ANALYSIS = {
   version: 1 as const,
@@ -55,6 +59,15 @@ const EPSILON = 1e-12;
 // residue into false activity. Keep the raw references in metadata but emit rest.
 const NEAR_SILENCE_RMS = 1e-5;
 const bounded = (value: number) => Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+
+function measured<T>(timingSink: BrowserLiveStageTimingSink | null,
+  stage: BrowserLiveStageName, work: () => T): T {
+  if (!timingSink) return work();
+  const started = performance.now();
+  const result = work();
+  timingSink.add(stage, performance.now() - started);
+  return result;
+}
 
 export function downmixToMono(channels: readonly Float32Array[]): Float32Array {
   if (!channels.length) throw new Error('Audio has no channels');
@@ -189,7 +202,9 @@ function* frameGenerator(mono: Float32Array, sampleRate: number): Generator<RawF
   }
 }
 function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,
-  melodyOverride: MelodyAnalysisWithEvidence | null = null): ListeningMap {
+  melodyOverride: MelodyAnalysisWithEvidence | null = null,
+  timingSink: BrowserLiveStageTimingSink | null = null): ListeningMap {
+  const generalMapStarted = timingSink ? performance.now() : 0;
   const duration = Math.min(...pcm.channels.map(channel => channel.length)) / pcm.sampleRate;
   const rmsReference = percentile95(frames.map(frame => frame.rms));
   const bandReference = percentile95(frames.flatMap(frame => [frame.low, frame.mid, frame.high]));
@@ -231,19 +246,20 @@ function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,
     rms: [frame.rms, next(index).rms], peak: [frame.peak, next(index).peak],
     onsetStrength: [frame.onsetStrength, next(index).onsetStrength],
   }));
-  const rhythmAnalysis = analyzeRhythm(
+  if (timingSink) timingSink.add('generalMapPreparation', performance.now() - generalMapStarted);
+  const rhythmAnalysis = measured(timingSink, 'rhythm', () => analyzeRhythm(
     normalized.map(frame => ({ time: frame.time, onsetStrength: frame.onsetStrength,
       fullBandOnset: frame.fullBandOnset, lowBandOnset: frame.lowBandOnset,
       highBandOnset: frame.highBandOnset, energy: frame.rms })),
     duration,
     REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate,
-  );
-  const percussionAnalysis = analyzePercussion(normalized.map(frame => ({
+  ));
+  const percussionAnalysis = measured(timingSink, 'percussion', () => analyzePercussion(normalized.map(frame => ({
     time: frame.time, rms: frame.rms, onsetStrength: frame.onsetStrength,
     sub: frame.sub, lowMid: frame.lowMid, mid: frame.percussionMid,
     high: frame.percussionHigh, air: frame.air, centroid: frame.centroid,
     spread: frame.spread, flatness: frame.flatness,
-  })), duration, pcm.sampleRate, REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate);
+  })), duration, pcm.sampleRate, REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate));
   const rhythm: RhythmSection[] | null = rhythmAnalysis.available && rhythmAnalysis.bpm !== null
     ? [{ id: 'real-rhythm', start: 0, end: duration, bpm: rhythmAnalysis.bpm,
       beatsPerBar: null, groove: rhythmAnalysis.groove, swing: rhythmAnalysis.swing }]
@@ -251,19 +267,24 @@ function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,
   const melodyResult = melodyOverride ?? analyzeMelodyWithEvidence({ mono, sampleRate: pcm.sampleRate });
   const melodyAnalysis = melodyResult.analysis;
   const melody = melodyAnalysis.available ? melodyAnalysis.notes : null;
-  const harmonyAnalysis = analyzeHarmony({ mono, sampleRate: pcm.sampleRate });
+  const harmonyAnalysis = measured(timingSink, 'harmony',
+    () => analyzeHarmony({ mono, sampleRate: pcm.sampleRate }));
   const harmony = harmonyAnalysis.available ? harmonyAnalysis.segments : null;
-  const tonalCenterAnalysis = analyzeTonalCenter(harmonyAnalysis, duration);
-  const structuralFrames = normalized.map(frame => {
-    const harmonyFrame = harmonyAnalysis.frames.reduce<typeof harmonyAnalysis.frames[number] | null>((nearest, candidate) =>
-      !nearest || Math.abs(candidate.time - frame.time) < Math.abs(nearest.time - frame.time) ? candidate : nearest, null);
-    return { time: frame.time, chroma: harmonyFrame?.chroma ?? Array(12).fill(0),
-      low: frame.low, mid: frame.mid, high: frame.high, brightness: frame.brightness,
-      texture: frame.texture, rms: frame.rms, onsetStrength: frame.onsetStrength };
+  const tonalCenterAnalysis = measured(timingSink, 'tonalCenter',
+    () => analyzeTonalCenter(harmonyAnalysis, duration));
+  const structureAnalysis = measured(timingSink, 'structure', () => {
+    const structuralFrames = normalized.map(frame => {
+      const harmonyFrame = harmonyAnalysis.frames.reduce<typeof harmonyAnalysis.frames[number] | null>((nearest, candidate) =>
+        !nearest || Math.abs(candidate.time - frame.time) < Math.abs(nearest.time - frame.time) ? candidate : nearest, null);
+      return { time: frame.time, chroma: harmonyFrame?.chroma ?? Array(12).fill(0),
+        low: frame.low, mid: frame.mid, high: frame.high, brightness: frame.brightness,
+        texture: frame.texture, rms: frame.rms, onsetStrength: frame.onsetStrength };
+    });
+    return analyzeStructure(
+      structuralFrames, duration, rhythmAnalysis.available ? rhythmAnalysis.beats : null,
+    );
   });
-  const structureAnalysis = analyzeStructure(
-    structuralFrames, duration, rhythmAnalysis.available ? rhythmAnalysis.beats : null,
-  );
+  const finalMapStarted = timingSink ? performance.now() : 0;
   const metadata: AudioAnalysisMetadata = {
     version: 1, sampleRate: pcm.sampleRate, channelCount: pcm.channels.length,
     frameSize: REAL_AUDIO_ANALYSIS.frameSize, hopSize: REAL_AUDIO_ANALYSIS.hopSize,
@@ -271,7 +292,7 @@ function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,
     bandsHz: { low: [20, 250], mid: [250, 4000], high: [4000, pcm.sampleRate / 2] },
     normalization: { strategy: 'p95-reference', rmsReference, bandReference, textureReference },
   };
-  return {
+  const result: ListeningMap = {
     version: 1, duration,
     capabilities: { melody: melodyAnalysis.available, rhythm: rhythmAnalysis.available,
       percussion: percussionAnalysis.available,
@@ -284,6 +305,8 @@ function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,
     spectrum, amplitude,
     analysis: metadata,
   };
+  if (timingSink) timingSink.add('finalMapAssembly', performance.now() - finalMapStarted);
+  return result;
 }
 
 function validatePcm(pcm: PcmAudio) {
@@ -298,7 +321,11 @@ export function analyzePcmListening(pcm: PcmAudio): ListeningMap {
 }
 
 async function analyzePcmListeningAsyncInternal(pcm: PcmAudio,
-  melodyOverride: MelodyAnalysisWithEvidence | null): Promise<ListeningMap> {
+  melodyOverride: MelodyAnalysisWithEvidence | null,
+  timingSink: BrowserLiveStageTimingSink | null = null): Promise<ListeningMap> {
+  const generalFramesStarted = timingSink ? performance.now() : 0;
+  let deliberateAsyncYieldWait = 0;
+  let deliberateAsyncYieldCount = 0;
   validatePcm(pcm);
   const mono = downmixToMono(pcm.channels);
   const frames: RawFrame[] = [];
@@ -306,9 +333,25 @@ async function analyzePcmListeningAsyncInternal(pcm: PcmAudio,
   for (const frame of frameGenerator(mono, pcm.sampleRate)) {
     frames.push(frame);
     index += 1;
-    if (index % 24 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
+    if (index % 24 === 0) {
+      if (timingSink) {
+        deliberateAsyncYieldCount += 1;
+        const yieldStarted = performance.now();
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        deliberateAsyncYieldWait += performance.now() - yieldStarted;
+      } else {
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+      }
+    }
   }
-  return finalize(frames, mono, pcm, melodyOverride);
+  if (timingSink) {
+    const generalFrameLoopWall = performance.now() - generalFramesStarted;
+    timingSink.add('generalFrameLoopWall', generalFrameLoopWall);
+    timingSink.add('deliberateAsyncYieldWait', deliberateAsyncYieldWait);
+    timingSink.add('generalFrameFftFeatures', Math.max(0, generalFrameLoopWall - deliberateAsyncYieldWait));
+    timingSink.addCount('deliberateAsyncYields', deliberateAsyncYieldCount);
+  }
+  return finalize(frames, mono, pcm, melodyOverride, timingSink);
 }
 
 export async function analyzePcmListeningAsync(pcm: PcmAudio): Promise<ListeningMap> {
@@ -317,6 +360,7 @@ export async function analyzePcmListeningAsync(pcm: PcmAudio): Promise<Listening
 
 /** Internal rolling composition seam; intentionally omitted from the package root. */
 export function analyzePcmListeningAsyncWithMelody(pcm: PcmAudio,
-  melody: MelodyAnalysisWithEvidence): Promise<ListeningMap> {
-  return analyzePcmListeningAsyncInternal(pcm, melody);
+  melody: MelodyAnalysisWithEvidence,
+  timingSink: BrowserLiveStageTimingSink | null = null): Promise<ListeningMap> {
+  return analyzePcmListeningAsyncInternal(pcm, melody, timingSink);
 }

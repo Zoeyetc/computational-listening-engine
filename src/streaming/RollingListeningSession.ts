@@ -5,6 +5,7 @@ import type { MelodyEvidenceBuildFrame, MelodyEvidenceTimeline } from '../melody
 import { collectListeningEvents } from '../ListeningTimeline.ts';
 import type { ListeningEvent } from '../listeningTimelineTypes.ts';
 import type { ListeningMap } from '../types.ts';
+import { beginBrowserLiveStageProfile } from '../profiling/BrowserLiveStageProfile.ts';
 import { RollingAnalysisEngine } from './RollingAnalysisEngine.ts';
 import { RollingPcmBuffer } from './RollingPcmBuffer.ts';
 
@@ -146,7 +147,11 @@ export function createRollingListeningSession(options: RollingListeningSessionOp
     if (stopped || !buffer.length) return;
     if (running) { rerunLatest = true; droppedAnalysisRequests += 1; return; }
     running = true;
+    const liveProfile = production ? beginBrowserLiveStageProfile() : null;
+    const rollingUpdateStarted = liveProfile ? performance.now() : 0;
+    const snapshotStarted = liveProfile ? performance.now() : 0;
     const pcm = buffer.snapshot();
+    if (liveProfile) liveProfile.add('rollingPcmSnapshotCopy', performance.now() - snapshotStarted);
     const observationTime = options.readTime();
     const windowDuration = pcm.length / options.sampleRate;
     const offset = Math.max(0, observationTime - windowDuration);
@@ -155,9 +160,11 @@ export function createRollingListeningSession(options: RollingListeningSessionOp
     const analysisStarted = now();
     try {
       const analyzed = production
-        ? (await production.analyzeSnapshot({ sampleRate: options.sampleRate, channels: [pcm] })).map
+        ? (await production.analyzeSnapshot(
+          { sampleRate: options.sampleRate, channels: [pcm] }, liveProfile)).map
         : await analyze({ sampleRate: options.sampleRate, channels: [pcm] });
       if (stopped) return;
+      const rollingMapStarted = liveProfile ? performance.now() : 0;
       const latestTime = options.readTime();
       const map = mapRollingListeningResult(analyzed, offset, latestTime, anchoredMelodyOffset);
       const cutoff = Math.max(0, latestTime - ROLLING_LISTENING_WINDOW_SECONDS);
@@ -172,11 +179,17 @@ export function createRollingListeningSession(options: RollingListeningSessionOp
         + (map.amplitude?.length ?? 0) * 64 + (map.spectrum?.length ?? 0) * 80
         + (map.harmonyAnalysis?.frames.length ?? 0) * 160 + (map.tonalCenterAnalysis?.frames.length ?? 0) * 192
         + (production?.diagnostics().estimatedNumericPayloadBytes ?? 0);
-      options.onUpdate({ map, time: latestTime, events: fresh, diagnostics: {
+      const update: RollingListeningUpdate = { map, time: latestTime, events: fresh, diagnostics: {
         rollingPcmBytes: buffer.byteLength, retainedEvidenceBytes: evidenceBytes,
         retainedEventCount: retainedEvents.length, analysisCadence: ROLLING_LISTENING_CADENCE_SECONDS,
         droppedAnalysisRequests, lastAnalysisLatency: Math.max(0, now() - analysisStarted),
-      } });
+      } };
+      if (liveProfile) {
+        liveProfile.add('rollingMapPreparation', performance.now() - rollingMapStarted);
+        liveProfile.add('totalRollingUpdate', performance.now() - rollingUpdateStarted);
+        liveProfile.finish();
+      }
+      options.onUpdate(update);
     } finally {
       running = false;
       if (rerunLatest && !stopped) { rerunLatest = false; void run(); }
