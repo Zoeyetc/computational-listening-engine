@@ -3,6 +3,7 @@ import type {
   MelodyRejectedCandidate,
 } from './types.ts';
 import { MELODY_REJECTED_CANDIDATE_CAP } from './types.ts';
+import { isFinitePositiveFrequency } from '../pitch.ts';
 
 export const MELODY_EVIDENCE_REASON_CODE = {
   LOW_RMS: 0,
@@ -67,6 +68,7 @@ export function retainMelodyRejectedCandidate(
   retained: readonly Omit<MelodyRejectedCandidate, 'rank'>[],
   candidate: Omit<MelodyRejectedCandidate, 'rank'>,
 ) {
+  if (!isFinitePositiveFrequency(candidate.frequencyHz)) return retained;
   return [...retained, candidate]
     .sort((a, b) => b.score - a.score || a.frequencyHz - b.frequencyHz || a.reason.localeCompare(b.reason))
     .slice(0, MELODY_REJECTED_CANDIDATE_CAP);
@@ -80,6 +82,13 @@ export function createCompactMelodyEvidenceTimeline(
   thresholds: MelodyEvidenceThresholds,
   track: MelodyEvidenceTrackDecision,
 ): MelodyEvidenceTimeline {
+  for (const frame of frames) {
+    if (frame.candidates.some(candidate => !isFinitePositiveFrequency(candidate.pitchHz))
+      || frame.rejectedCandidates.some(candidate => !isFinitePositiveFrequency(candidate.frequencyHz))
+      || (frame.finalPitchHz !== null && !isFinitePositiveFrequency(frame.finalPitchHz))) {
+      throw new RangeError('Melody evidence frequencies must be finite and positive');
+    }
+  }
   const candidateCount = frames.reduce((sum, frame) => sum + frame.candidates.length, 0);
   const retainedRejectedCandidateCount = frames.reduce((sum, frame) => sum + frame.rejectedCandidates.length, 0);
   const storage: CompactMelodyEvidenceStorage = {

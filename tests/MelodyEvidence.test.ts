@@ -135,7 +135,7 @@ test('empty local-minimum search records the existing global-minimum fallback', 
   assert.equal(frame.outOfRangeCandidateCount, 1);
 });
 
-test('the current fallback makes attempted generation with zero raw candidates unreachable', () => {
+test('ordinary fallback fixtures still produce valid raw candidates', () => {
   const inputs = [tone(440, 1), tone(75, 1), deterministicNoise(1),
     Float32Array.from({ length: SAMPLE_RATE }, () => 0.01)];
   inputs.forEach(signal => {

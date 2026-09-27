@@ -1,6 +1,6 @@
 import { decodeNormalizedEvidence, readCompactMelodyEvidenceStorage } from '../melody-evidence/compactTimeline.ts';
 import type { MelodyEvidenceTimeline } from '../melody-evidence/types.ts';
-import { hzToMidi } from '../pitch.ts';
+import { hzToMidi, isFinitePositiveFrequency } from '../pitch.ts';
 import type { BassCandidate, BassCandidateFrame } from './types.ts';
 
 /** Adapt retained candidates only. Melody selections and final confidence are never read. */
@@ -11,9 +11,11 @@ export function bassCandidatesFromMelodyEvidence(timeline: MelodyEvidenceTimelin
     const candidates: BassCandidate[] = [];
     for (let index = storage.candidateOffsets[frameIndex]; index < storage.candidateOffsets[frameIndex + 1]; index += 1) {
       const pitchHz = storage.candidatePitchHz[index];
-      if (pitchHz > 330) continue;
+      if (!isFinitePositiveFrequency(pitchHz) || pitchHz > 330) continue;
+      const midiFloat = hzToMidi(pitchHz);
+      if (!Number.isFinite(midiFloat)) continue;
       candidates.push(Object.freeze({
-        pitchHz, midiFloat: hzToMidi(pitchHz),
+        pitchHz, midiFloat,
         score: decodeNormalizedEvidence(storage.candidateScore[index]),
         periodicity: decodeNormalizedEvidence(storage.candidatePeriodicity[index]),
         salience: decodeNormalizedEvidence(storage.candidateSalience[index]),
@@ -23,8 +25,11 @@ export function bassCandidatesFromMelodyEvidence(timeline: MelodyEvidenceTimelin
     for (let index = storage.rejectedCandidateOffsets[frameIndex]; index < storage.rejectedCandidateOffsets[frameIndex + 1]; index += 1) {
       if (storage.rejectedCandidateReasonCodes[index] !== 0) continue;
       const pitchHz = storage.rejectedCandidateFrequencyHz[index];
+      if (!isFinitePositiveFrequency(pitchHz) || pitchHz > 330) continue;
+      const midiFloat = hzToMidi(pitchHz);
+      if (!Number.isFinite(midiFloat)) continue;
       candidates.push(Object.freeze({
-        pitchHz, midiFloat: hzToMidi(pitchHz),
+        pitchHz, midiFloat,
         score: decodeNormalizedEvidence(storage.rejectedCandidateScore[index]),
         periodicity: decodeNormalizedEvidence(storage.rejectedCandidatePeriodicity[index]),
         salience: decodeNormalizedEvidence(storage.rejectedCandidateSalience[index]),

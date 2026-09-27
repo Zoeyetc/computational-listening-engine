@@ -62,6 +62,42 @@ test('bass candidate adapter ignores Melody path and confidence decisions', () =
   assert.ok(original.every(item => item.candidates.every(item => item.pitchHz <= 330)));
 });
 
+test('bass candidate adapter excludes invalid usable and below-range Melody frequencies', () => {
+  const invalidValues = [0, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+  const usableTimeline = analyzePcmListening(sine(220)).melodyEvidence!;
+  const usableStorage = readCompactMelodyEvidenceStorage(usableTimeline);
+  const usableIndex = usableStorage.candidatePitchHz.findIndex(frequency => frequency <= 330);
+  assert.ok(usableIndex >= 0);
+  const originalUsableFrequency = usableStorage.candidatePitchHz[usableIndex];
+  const validUsable = bassCandidatesFromMelodyEvidence(usableTimeline);
+
+  for (const invalid of invalidValues) {
+    usableStorage.candidatePitchHz[usableIndex] = invalid;
+    const adapted = bassCandidatesFromMelodyEvidence(usableTimeline);
+    assert.ok(adapted.every(item => item.candidates.every(candidate =>
+      Number.isFinite(candidate.pitchHz) && candidate.pitchHz > 0 && Number.isFinite(candidate.midiFloat))));
+  }
+  usableStorage.candidatePitchHz[usableIndex] = originalUsableFrequency;
+  assert.deepEqual(bassCandidatesFromMelodyEvidence(usableTimeline), validUsable);
+
+  const rejectedTimeline = analyzePcmListening(sine(75)).melodyEvidence!;
+  const rejectedStorage = readCompactMelodyEvidenceStorage(rejectedTimeline);
+  assert.ok(rejectedStorage.rejectedCandidateFrequencyHz.length > 0);
+  const originalRejectedFrequency = rejectedStorage.rejectedCandidateFrequencyHz[0];
+  const validRejected = bassCandidatesFromMelodyEvidence(rejectedTimeline);
+  assert.ok(validRejected.some(item => item.candidates.some(candidate =>
+    candidate.source === 'melody-range-rejected-low')));
+
+  for (const invalid of invalidValues) {
+    rejectedStorage.rejectedCandidateFrequencyHz[0] = invalid;
+    const adapted = bassCandidatesFromMelodyEvidence(rejectedTimeline);
+    assert.ok(adapted.every(item => item.candidates.every(candidate =>
+      Number.isFinite(candidate.pitchHz) && candidate.pitchHz > 0 && Number.isFinite(candidate.midiFloat))));
+  }
+  rejectedStorage.rejectedCandidateFrequencyHz[0] = originalRejectedFrequency;
+  assert.deepEqual(bassCandidatesFromMelodyEvidence(rejectedTimeline), validRejected);
+});
+
 test('high-only input exposes harmonic ambiguity without claiming a correct bass', () => {
   const result = analyzeDualPathListening(sine(880));
   assert.ok(result.bassEvidence.frames.some(frame => frame.candidates.length > 0));

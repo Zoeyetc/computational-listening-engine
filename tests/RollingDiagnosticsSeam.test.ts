@@ -147,6 +147,88 @@ test('busy built-in analysis retains one latest coalesced rerun with stable iden
     <= diagnostics[1].wallClockMilliseconds.eligible);
 });
 
+test('failed background analysis is contained and a coalesced request can still publish', async () => {
+  const sampleRate = 32_000;
+  const block = new Float32Array(sampleRate / 2);
+  const validMap = await analyzePcmListeningAsync({ sampleRate, channels: [block] });
+  const updates: RollingListeningUpdate[] = [];
+  const diagnostics: RollingAnalysisDiagnosticRecord[] = [];
+  let calls = 0;
+  let rejectFirst: ((error: Error) => void) | null = null;
+  const firstAnalysis = new Promise<never>((_, reject) => { rejectFirst = reject; });
+  let resolvePublished: (() => void) | null = null;
+  const published = new Promise<void>(resolve => { resolvePublished = resolve; });
+  let sessionTime = 0.5;
+  const session = createRollingListeningSession({
+    sampleRate,
+    readTime: () => sessionTime,
+    analyze: async () => {
+      calls += 1;
+      if (calls === 1) return firstAnalysis;
+      return validMap;
+    },
+    onUpdate(update) { updates.push(update); },
+    onDiagnostic(record) {
+      diagnostics.push(record);
+      resolvePublished?.();
+    },
+  });
+
+  session.push([block]);
+  sessionTime = 1;
+  session.push([block]);
+  rejectFirst?.(new Error('deterministic rolling failure'));
+  await published;
+  session.stop();
+
+  assert.equal(calls, 2);
+  assert.equal(updates.length, 1);
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].runId, 2);
+  assert.equal(diagnostics[0].eligibility, 'coalesced');
+  assert.equal(diagnostics[0].coalescedRequestCount, 1);
+  assert.equal(updates[0].diagnostics.droppedAnalysisRequests, 1);
+});
+
+test('manual analyzeNow preserves rejection reporting and recovers for the next request', async () => {
+  const sampleRate = 32_000;
+  const block = new Float32Array(sampleRate / 2);
+  const validMap = await analyzePcmListeningAsync({ sampleRate, channels: [block] });
+  const updates: RollingListeningUpdate[] = [];
+  const diagnostics: RollingAnalysisDiagnosticRecord[] = [];
+  let fail = false;
+  let resolveInitial: (() => void) | null = null;
+  const initial = new Promise<void>(resolve => { resolveInitial = resolve; });
+  const session = createRollingListeningSession({
+    sampleRate,
+    readTime: () => 0.5,
+    analyze: async () => {
+      if (fail) throw new Error('manual rolling failure');
+      return validMap;
+    },
+    onUpdate(update) { updates.push(update); },
+    onDiagnostic(record) {
+      diagnostics.push(record);
+      resolveInitial?.();
+      resolveInitial = null;
+    },
+  });
+  session.push([block]);
+  await initial;
+
+  fail = true;
+  await assert.rejects(session.analyzeNow(), /manual rolling failure/);
+  assert.equal(updates.length, 1);
+  assert.equal(diagnostics.length, 1);
+
+  fail = false;
+  await session.analyzeNow();
+  session.stop();
+  assert.equal(updates.length, 2);
+  assert.equal(diagnostics.length, 2);
+  assert.deepStrictEqual(diagnostics.map(record => record.runId), [1, 3]);
+});
+
 test('diagnostic callback failures cannot break listening or change output', async () => {
   const baseline = await runPublications(32_000, [0.75], null);
   const observed = await runPublications(32_000, [0.75], () => {

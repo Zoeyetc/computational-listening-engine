@@ -290,11 +290,18 @@ export function createRollingListeningSession(options: RollingListeningSessionOp
         rerunLatest = false;
         const rerunRequest = pendingRerunRequest;
         pendingRerunRequest = null;
-        if (rerunRequest) void run(rerunRequest);
+        if (rerunRequest) runInBackground(rerunRequest);
       }
     }
     if (publishedDiagnostic) deliverDiagnostic(publishedDiagnostic);
   };
+
+  function runInBackground(request: AnalysisRequest) {
+    void run(request).catch(() => {
+      // Scheduled rolling analyses have no awaiting caller. A failed run publishes
+      // neither an update nor a success diagnostic; run() finally restores state.
+    });
+  }
 
   return {
     push(channels: readonly Float32Array[]) {
@@ -307,7 +314,7 @@ export function createRollingListeningSession(options: RollingListeningSessionOp
         } else buffer.push(channels);
       } else buffer.push(channels);
       if (buffer.totalDuration - lastScheduledAt >= ROLLING_LISTENING_CADENCE_SECONDS) {
-        lastScheduledAt = buffer.totalDuration; void run(createRequest('cadence'));
+        lastScheduledAt = buffer.totalDuration; runInBackground(createRequest('cadence'));
       }
     },
     analyzeNow: () => run(createRequest('manual')),

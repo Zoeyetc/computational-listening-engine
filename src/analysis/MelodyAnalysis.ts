@@ -8,7 +8,7 @@ import type {
   MelodyCandidateScoreDiagnostic, MelodyDpDiagnostics, MelodyDpFrameDiagnostic, MelodyDpStateDiagnostic,
   MelodySubharmonicAmbiguityStateDiagnostic, MelodySubharmonicRelationDiagnostic, MelodyYinFrameDiagnostic,
 } from '../diagnostics/dpDiagnostics.ts';
-import { hzToMidi, midiToNoteName } from '../pitch.ts';
+import { hzToMidi, isFinitePositiveFrequency, midiToNoteName } from '../pitch.ts';
 
 export const MELODY_ANALYSIS = {
   version: 1 as const,
@@ -225,9 +225,8 @@ function analysisFrame(signal: Float32Array, start: number) {
   return { frame, rms: Math.sqrt(sumSquares / 512) };
 }
 
-function scoreCandidate(integerLag: number, interpolatedLag: number, domain: YinLagDomain,
+function scoreCandidate(integerLag: number, interpolatedLag: number, pitchHz: number, domain: YinLagDomain,
   frame: Float32Array, rms: number, collectScoreDiagnostics: boolean): Candidate {
-  const pitchHz = MELODY_ANALYSIS.analysisSampleRate / interpolatedLag;
   const cumulativeDifference = domain.cumulative[integerLag];
   const midiFloat = hzToMidi(pitchHz);
   const periodicityUnclamped = 1 - cumulativeDifference;
@@ -293,14 +292,17 @@ function acousticFrame(frame: Float32Array, rms: number, time: number,
       localMinimumCount = domain.localMinima.length;
       searchMode = domain.searchMode;
       for (const lag of domain.candidateLags) {
-        rawCandidateCount += 1;
         const left = domain.cumulative[lag - 1] ?? domain.cumulative[lag];
         const center = domain.cumulative[lag];
         const right = domain.cumulative[lag + 1] ?? domain.cumulative[lag];
         const denominator = left - 2 * center + right;
         const interpolatedLag = denominator === 0 ? lag : lag + 0.5 * (left - right) / denominator;
-        const candidate = scoreCandidate(lag, interpolatedLag, domain, frame, rms, collectScoreDiagnostics);
-        const pitchHz = candidate.pitchHz;
+        if (!Number.isFinite(interpolatedLag) || interpolatedLag <= 0) continue;
+        const pitchHz = MELODY_ANALYSIS.analysisSampleRate / interpolatedLag;
+        if (!isFinitePositiveFrequency(pitchHz)) continue;
+        rawCandidateCount += 1;
+        const candidate = scoreCandidate(
+          lag, interpolatedLag, pitchHz, domain, frame, rms, collectScoreDiagnostics);
         if (!(pitchHz >= MELODY_ANALYSIS.minimumHz && pitchHz <= MELODY_ANALYSIS.maximumHz)) {
           outOfRangeCandidateCount += 1;
           rejectedCandidates = retainMelodyRejectedCandidate(rejectedCandidates, {
