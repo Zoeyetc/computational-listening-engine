@@ -92,3 +92,4 @@ export * from './diagnostics/index.ts';
 
 // Opt-in v0.3 dual-path architecture. Existing listening entry points remain unchanged.
 export * from './bass/index.ts';
+export * from './ListeningRecord.ts';

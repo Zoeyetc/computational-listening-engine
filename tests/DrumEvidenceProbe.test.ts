@@ -98,5 +98,5 @@ test('probe state is per-analysis, bounded, and absent from the public package r
   assert.ok(first.drum.retainedNumericPayloadBytes < 16_384);
   assert.equal(first.drum.onsetCandidateCount, first.drum.events.length);
   assert.equal('probeDrumEvidence' in engine, false);
-  assert.equal(Object.keys(engine).length, 61);
+  assert.equal(Object.keys(engine).length, 62);
 });
