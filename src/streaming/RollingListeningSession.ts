@@ -5,6 +5,7 @@ import type { MelodyEvidenceBuildFrame, MelodyEvidenceTimeline } from '../melody
 import { collectListeningEvents } from '../ListeningTimeline.ts';
 import type { ListeningEvent } from '../listeningTimelineTypes.ts';
 import type { ListeningMap } from '../types.ts';
+import { shiftDrumEvidence } from '../drum/DrumEvidence.ts';
 import { beginBrowserLiveStageProfile } from '../profiling/BrowserLiveStageProfile.ts';
 import { RollingAnalysisEngine } from './RollingAnalysisEngine.ts';
 import { RollingPcmBuffer } from './RollingPcmBuffer.ts';
@@ -130,6 +131,7 @@ export function mapRollingListeningResult(map: ListeningMap, offset: number, ses
     melodyEvidence: shiftEvidence(map.melodyEvidence, melodyOffset),
     percussion: capabilities.percussion ? percussionAnalysis?.events ?? [] : null,
     percussionAnalysis,
+    drumEvidence: shiftDrumEvidence(map.drumEvidence, offset, capabilities.percussion),
     rhythm: capabilities.rhythm ? map.rhythm?.map(item => shiftInterval(item, offset)) ?? [] : null,
     rhythmAnalysis,
     harmony: capabilities.harmony ? harmonyAnalysis?.segments ?? [] : null,

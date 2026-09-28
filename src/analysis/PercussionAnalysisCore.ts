@@ -26,6 +26,8 @@ export type PercussionCandidateDisposition =
 
 export type PercussionCoreClassification = PercussionClassification & Readonly<{
   ambiguityReasons: readonly PercussionAmbiguityReason[];
+  transientQuality: number;
+  consistency: number;
 }>;
 
 export type PercussionCandidateTrace = Readonly<{
@@ -99,7 +101,7 @@ export function classifyPercussionCore(descriptor: PercussionDescriptors,
   return { role,
     confidence: ambiguous ? Math.max(PERCUSSION_CORE_THRESHOLDS.confidence, confidence * 0.82) : confidence,
     topScore, secondScore, margin, scores: { ...named, 'other-percussion': otherScore },
-    ambiguityReasons,
+    ambiguityReasons, transientQuality, consistency,
   };
 }
 
@@ -144,7 +146,8 @@ export function publicPercussionClassification(
 }
 
 export function analyzePercussionCore(frames: readonly PercussionAnalysisFrame[], duration: number,
-  sampleRate: number, hopSeconds: number, collectTrace: boolean): Readonly<{
+  sampleRate: number, hopSeconds: number, collectTrace: boolean,
+  measureTraceCollection = collectTrace): Readonly<{
     analysis: PercussionAnalysis;
     trace: PercussionCoreTrace | null;
   }> {
@@ -163,7 +166,7 @@ export function analyzePercussionCore(frames: readonly PercussionAnalysisFrame[]
     classification: PercussionCoreClassification | null,
     disposition: PercussionCandidateDisposition, acceptedEventId: string | null) => {
     if (!traces) return;
-    const started = performance.now();
+    const started = measureTraceCollection ? performance.now() : 0;
     const frame = frames[index];
     const baseline = localBaseline(index);
     traces.push(Object.freeze({
@@ -172,7 +175,7 @@ export function analyzePercussionCore(frames: readonly PercussionAnalysisFrame[]
       onsetThreshold: Math.max(PERCUSSION_CORE_THRESHOLDS.onset, baseline * 1.35 + 0.06),
       descriptors, classification, disposition, acceptedEventId,
     }));
-    collectionMilliseconds += performance.now() - started;
+    if (measureTraceCollection) collectionMilliseconds += performance.now() - started;
   };
   const events: PercussionHit[] = [];
   const lastByRole = new Map<PercussionKind, number>();

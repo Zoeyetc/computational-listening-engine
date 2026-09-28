@@ -122,6 +122,120 @@ export type PercussionAnalysis = Readonly<{
   }>;
 }>;
 
+/** Canonical named Drum hypotheses. `other-percussion` is an abstention fallback, not a sixth class. */
+export type DrumNamedKind = Exclude<PercussionKind, 'other-percussion'>;
+
+/** Comparative heuristic evidence only. Scores and ranks are not probabilities. */
+export type DrumHypothesis = Readonly<{
+  kind: DrumNamedKind;
+  comparativeScore: number; // 0..1 heuristic score; uncalibrated
+  rank: 1 | 2 | 3 | 4 | 5;
+}>;
+
+export type DrumAmbiguityReason =
+  | 'MIXED_BROADBAND_EVIDENCE'
+  | 'LOW_CLASS_MARGIN'
+  | 'LOW_TOP_SCORE';
+
+/** Classifier evidence is deterministic and explicitly uncalibrated. */
+export type DrumClassifierEvidence = Readonly<{
+  calibration: 'UNCALIBRATED';
+  hypotheses: readonly [DrumHypothesis, DrumHypothesis, DrumHypothesis,
+    DrumHypothesis, DrumHypothesis];
+  topComparativeScore: number;
+  secondComparativeScore: number;
+  comparativeMargin: number;
+  transientQuality: number;
+  consistency: number;
+  uncalibratedConfidence: number;
+}>;
+
+export type DrumAcousticObservation = Readonly<{
+  normalizedRms: number;
+  normalizedOnsetStrength: number;
+  localOnsetBaseline: number;
+  appliedOnsetThreshold: number;
+}>;
+
+export type DrumSelectedDecision = Readonly<{
+  state: 'SELECTED';
+  reason: 'NAMED_CLASS_ACCEPTED';
+  selectedClass: DrumNamedKind;
+  classifierEvidence: DrumClassifierEvidence;
+  physicalEventStrength: number; // 0..1 normalized event intensity; not classifier evidence
+  percussionEventId: string;
+}>;
+
+export type DrumAmbiguousDecision = Readonly<{
+  state: 'ABSTAINED';
+  reason: 'AMBIGUOUS_CLASS_EVIDENCE';
+  ambiguityFallback: 'other-percussion';
+  ambiguityReasons: readonly [DrumAmbiguityReason, ...DrumAmbiguityReason[]];
+  classifierEvidence: DrumClassifierEvidence;
+  physicalEventStrength: number; // accepted physical event strength, despite named-class abstention
+  percussionEventId: string;
+}>;
+
+export type DrumInsufficientDecision = Readonly<{
+  state: 'ABSTAINED';
+  reason: 'INSUFFICIENT_EVIDENCE';
+  classifierEvidence: DrumClassifierEvidence;
+}>;
+
+export type DrumRejectedDecision =
+  | Readonly<{ state: 'REJECTED'; reason: 'NON_PERCUSSIVE_SUSTAINED' }>
+  | Readonly<{ state: 'REJECTED'; reason: 'INCOMPLETE_RIGHT_EDGE' }>
+  | Readonly<{
+    state: 'REJECTED';
+    reason: 'TEMPORAL_DEDUPLICATION';
+    classifierEvidence: DrumClassifierEvidence;
+  }>;
+
+export type DrumDecision = DrumSelectedDecision | DrumAmbiguousDecision
+  | DrumInsufficientDecision | DrumRejectedDecision;
+
+/** One snapshot-scoped interpretation attempt produced by the existing Percussion pass. */
+export type DrumEvidenceAttempt = Readonly<{
+  id: string;
+  time: number;
+  sourceFrame: number;
+  acoustic: DrumAcousticObservation;
+  decision: DrumDecision;
+}>;
+
+type DrumEvidenceBase = Readonly<{
+  version: 1;
+  experimental: true;
+  calibration: 'UNCALIBRATED';
+  analyzedWindow: Readonly<{ start: number; end: number }>;
+}>;
+
+export type DrumEvidenceUnavailable = DrumEvidenceBase & Readonly<{
+  status: 'UNAVAILABLE';
+  reason: 'ANALYSIS_NOT_RUN';
+  trackCapability: 'UNAVAILABLE';
+  attemptCount: 0;
+  attempts: readonly [];
+}>;
+
+export type DrumEvidenceNoEvent = DrumEvidenceBase & Readonly<{
+  status: 'NO_EVENT';
+  reason: 'NO_PERCUSSIVE_OPPORTUNITY';
+  trackCapability: 'UNAVAILABLE';
+  attemptCount: 0;
+  attempts: readonly [];
+}>;
+
+export type DrumEvidenceObserved = DrumEvidenceBase & Readonly<{
+  status: 'OBSERVED';
+  trackCapability: 'AVAILABLE' | 'UNAVAILABLE';
+  attemptCount: number;
+  attempts: readonly [DrumEvidenceAttempt, ...DrumEvidenceAttempt[]];
+}>;
+
+/** Experimental, uncalibrated event-level Drum interpretation evidence. */
+export type DrumEvidence = DrumEvidenceUnavailable | DrumEvidenceNoEvent | DrumEvidenceObserved;
+
 export type RhythmSection = Readonly<{
   id: string;
   start: number;
@@ -419,6 +533,8 @@ export type ListeningMap = Readonly<{
   melodyEvidence?: MelodyEvidenceTimeline | null;
   percussion: readonly PercussionHit[] | null;
   percussionAnalysis?: PercussionAnalysis | null;
+  /** Experimental and uncalibrated. Absence/null means this producer did not run Drum evidence. */
+  drumEvidence?: DrumEvidence | null;
   rhythm: readonly RhythmSection[] | null;
   rhythmAnalysis?: RhythmAnalysis | null;
   harmony: readonly HarmonyRegion[] | null;

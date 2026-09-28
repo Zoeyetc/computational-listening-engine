@@ -10,8 +10,8 @@ import { analyzeMelodyWithEvidence, type MelodyAnalysisWithEvidence } from './Me
 import { analyzeHarmony } from './HarmonyAnalysis.ts';
 import { analyzeTonalCenter } from './TonalCenterAnalysis.ts';
 import { analyzeStructure } from './StructureAnalysis.ts';
-import { analyzePercussion } from './PercussionAnalysis.ts';
 import { analyzePercussionCore, type PercussionCoreTrace } from './PercussionAnalysisCore.ts';
+import { createDrumEvidence } from '../drum/DrumEvidence.ts';
 import type {
   BrowserLiveStageName,
   BrowserLiveStageTimingSink,
@@ -256,22 +256,23 @@ function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,
     duration,
     REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate,
   ));
-  const percussionAnalysis = measured(timingSink, 'percussion', () => {
+  const percussionResult = measured(timingSink, 'percussion', () => {
     const percussionFrames = normalized.map(frame => ({
       time: frame.time, rms: frame.rms, onsetStrength: frame.onsetStrength,
       sub: frame.sub, lowMid: frame.lowMid, mid: frame.percussionMid,
       high: frame.percussionHigh, air: frame.air, centroid: frame.centroid,
       spread: frame.spread, flatness: frame.flatness,
     }));
-    if (!percussionTraceCapture) {
-      return analyzePercussion(percussionFrames, duration, pcm.sampleRate,
-        REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate);
-    }
     const result = analyzePercussionCore(percussionFrames, duration, pcm.sampleRate,
-      REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate, true);
-    percussionTraceCapture.trace = result.trace;
-    return result.analysis;
+      REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate, true, Boolean(percussionTraceCapture));
+    if (!result.trace) throw new Error('Drum evidence trace was not collected');
+    if (percussionTraceCapture) percussionTraceCapture.trace = result.trace;
+    return Object.freeze({
+      analysis: result.analysis,
+      drumEvidence: createDrumEvidence(result.analysis, result.trace, duration),
+    });
   });
+  const percussionAnalysis = percussionResult.analysis;
   const rhythm: RhythmSection[] | null = rhythmAnalysis.available && rhythmAnalysis.bpm !== null
     ? [{ id: 'real-rhythm', start: 0, end: duration, bpm: rhythmAnalysis.bpm,
       beatsPerBar: null, groove: rhythmAnalysis.groove, swing: rhythmAnalysis.swing }]
@@ -312,7 +313,7 @@ function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,
       structure: structureAnalysis.available, spectrum: true },
     melody, melodyAnalysis, melodyEvidence: melodyResult.evidence,
     percussion: percussionAnalysis.available ? percussionAnalysis.events : null,
-    percussionAnalysis, rhythm, rhythmAnalysis,
+    percussionAnalysis, drumEvidence: percussionResult.drumEvidence, rhythm, rhythmAnalysis,
     harmony, harmonyAnalysis, tonalCenterAnalysis, structureAnalysis,
     spectrum, amplitude,
     analysis: metadata,
