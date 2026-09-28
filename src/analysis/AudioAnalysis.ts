@@ -11,6 +11,7 @@ import { analyzeHarmony } from './HarmonyAnalysis.ts';
 import { analyzeTonalCenter } from './TonalCenterAnalysis.ts';
 import { analyzeStructure } from './StructureAnalysis.ts';
 import { analyzePercussion } from './PercussionAnalysis.ts';
+import { analyzePercussionCore, type PercussionCoreTrace } from './PercussionAnalysisCore.ts';
 import type {
   BrowserLiveStageName,
   BrowserLiveStageTimingSink,
@@ -203,7 +204,8 @@ function* frameGenerator(mono: Float32Array, sampleRate: number): Generator<RawF
 }
 function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,
   melodyOverride: MelodyAnalysisWithEvidence | null = null,
-  timingSink: BrowserLiveStageTimingSink | null = null): ListeningMap {
+  timingSink: BrowserLiveStageTimingSink | null = null,
+  percussionTraceCapture: { trace: PercussionCoreTrace | null } | null = null): ListeningMap {
   const generalMapStarted = timingSink ? performance.now() : 0;
   const duration = Math.min(...pcm.channels.map(channel => channel.length)) / pcm.sampleRate;
   const rmsReference = percentile95(frames.map(frame => frame.rms));
@@ -254,12 +256,22 @@ function finalize(frames: RawFrame[], mono: Float32Array, pcm: PcmAudio,
     duration,
     REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate,
   ));
-  const percussionAnalysis = measured(timingSink, 'percussion', () => analyzePercussion(normalized.map(frame => ({
-    time: frame.time, rms: frame.rms, onsetStrength: frame.onsetStrength,
-    sub: frame.sub, lowMid: frame.lowMid, mid: frame.percussionMid,
-    high: frame.percussionHigh, air: frame.air, centroid: frame.centroid,
-    spread: frame.spread, flatness: frame.flatness,
-  })), duration, pcm.sampleRate, REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate));
+  const percussionAnalysis = measured(timingSink, 'percussion', () => {
+    const percussionFrames = normalized.map(frame => ({
+      time: frame.time, rms: frame.rms, onsetStrength: frame.onsetStrength,
+      sub: frame.sub, lowMid: frame.lowMid, mid: frame.percussionMid,
+      high: frame.percussionHigh, air: frame.air, centroid: frame.centroid,
+      spread: frame.spread, flatness: frame.flatness,
+    }));
+    if (!percussionTraceCapture) {
+      return analyzePercussion(percussionFrames, duration, pcm.sampleRate,
+        REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate);
+    }
+    const result = analyzePercussionCore(percussionFrames, duration, pcm.sampleRate,
+      REAL_AUDIO_ANALYSIS.hopSize / pcm.sampleRate, true);
+    percussionTraceCapture.trace = result.trace;
+    return result.analysis;
+  });
   const rhythm: RhythmSection[] | null = rhythmAnalysis.available && rhythmAnalysis.bpm !== null
     ? [{ id: 'real-rhythm', start: 0, end: duration, bpm: rhythmAnalysis.bpm,
       beatsPerBar: null, groove: rhythmAnalysis.groove, swing: rhythmAnalysis.swing }]
@@ -318,6 +330,19 @@ export function analyzePcmListening(pcm: PcmAudio): ListeningMap {
   validatePcm(pcm);
   const mono = downmixToMono(pcm.channels);
   return finalize([...frameGenerator(mono, pcm.sampleRate)], mono, pcm);
+}
+
+/** Internal evidence probe seam. It reuses the normal general frames and percussion pass. */
+export function analyzePcmListeningWithPercussionTrace(pcm: PcmAudio): Readonly<{
+  map: ListeningMap;
+  trace: PercussionCoreTrace;
+}> {
+  validatePcm(pcm);
+  const mono = downmixToMono(pcm.channels);
+  const capture: { trace: PercussionCoreTrace | null } = { trace: null };
+  const map = finalize([...frameGenerator(mono, pcm.sampleRate)], mono, pcm, null, null, capture);
+  if (!capture.trace) throw new Error('Percussion trace was not collected');
+  return Object.freeze({ map, trace: capture.trace });
 }
 
 async function analyzePcmListeningAsyncInternal(pcm: PcmAudio,
