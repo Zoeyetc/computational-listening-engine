@@ -1,0 +1,161 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Drum Event Annotation v0.1</title>
+<style>
+  body { font: 15px/1.4 system-ui, sans-serif; max-width: 760px; margin: 24px auto; padding: 0 16px; }
+  fieldset { margin: 16px 0; } button, select, input { font: inherit; margin: 4px; }
+  #clock { font: 700 28px ui-monospace, monospace; }
+  #status { white-space: pre-wrap; background: #eee; padding: 10px; }
+  ol { font-family: ui-monospace, monospace; max-height: 280px; overflow: auto; }
+</style>
+<h1>Drum Event Annotation v0.1</h1>
+<p>Select <code>Kit Calibration.wav</code>. Audio stays local to this browser.</p>
+<input id="file" type="file" accept="audio/wav">
+<fieldset>
+  <legend>Window</legend>
+  <select id="window"></select>
+  <button id="loadWindow">Load window</button>
+  <label>Rate <select id="rate"><option>0.5</option><option>0.75</option><option selected>1</option></select></label>
+</fieldset>
+<audio id="audio" controls></audio>
+<p id="clock">00:00.000</p>
+<p>
+  <button id="play">Play / pause [Space]</button>
+  <button id="tap">Record onset [T]</button>
+  <button id="undo">Undo [U]</button>
+  <button id="back">−50 ms [←]</button>
+  <button id="forward">+50 ms [→]</button>
+</p>
+<p><button id="exportJson">Export JSON</button> <button id="exportCsv">Export CSV</button></p>
+<div id="status"></div>
+<ol id="annotations"></ol>
+<script type="module">
+const windows = [
+  { id: 'kit-kick', label: 'kick', start: 7.5, end: 17.5 },
+  { id: 'kit-snare', label: 'snare', start: 35.5, end: 45.5 },
+  { id: 'kit-hi-hat', label: 'hi-hat', start: 63, end: 73 },
+  { id: 'kit-tom', label: 'tom', start: 85, end: 95 },
+];
+const expectedFile = 'Kit Calibration.wav';
+const expectedSha256 = 'c4960207cee841517e4a95f581cdf9be6f719aeae93016513f0a483b9687e2d1';
+const annotations = Object.fromEntries(windows.map(window => [window.id, []]));
+const $ = id => document.getElementById(id);
+const audio = $('audio');
+let selectedFile = null;
+let objectUrl = null;
+let sourceSha256 = null;
+const format = seconds => {
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds - minutes * 60;
+  return `${String(minutes).padStart(2, '0')}:${remainder.toFixed(3).padStart(6, '0')}`;
+};
+const currentWindow = () => windows.find(item => item.id === $('window').value);
+for (const window of windows) {
+  const option = document.createElement('option');
+  option.value = window.id;
+  option.textContent = `${window.label}: ${format(window.start)}–${format(window.end)}`;
+  $('window').append(option);
+}
+function render() {
+  const window = currentWindow();
+  $('clock').textContent = format(audio.currentTime || window.start);
+  $('status').textContent = selectedFile
+    ? `${selectedFile.name}\n${window.label}: ${format(window.start)}–${format(window.end)}\nAnnotations: ${annotations[window.id].length}`
+    : 'No audio selected.';
+  const ordered = [...annotations[window.id]].sort((a, b) => a.timeSeconds - b.timeSeconds);
+  $('annotations').replaceChildren(...ordered.map((item, index) => {
+    const li = document.createElement('li');
+    li.textContent = `${index + 1}. ${format(item.timeSeconds)}  (+${(item.timeSeconds - window.start).toFixed(3)} s)`;
+    return li;
+  }));
+}
+function loadWindow() {
+  const window = currentWindow();
+  audio.pause();
+  audio.currentTime = window.start;
+  render();
+}
+function togglePlayback() {
+  if (!selectedFile) return;
+  const window = currentWindow();
+  if (audio.currentTime < window.start || audio.currentTime >= window.end) audio.currentTime = window.start;
+  if (audio.paused) audio.play(); else audio.pause();
+}
+function tap() {
+  const window = currentWindow();
+  if (!selectedFile || audio.currentTime < window.start || audio.currentTime >= window.end) return;
+  annotations[window.id].push({ timeSeconds: Number(audio.currentTime.toFixed(3)), label: window.label });
+  render();
+}
+function undo() { annotations[currentWindow().id].pop(); render(); }
+function seek(delta) {
+  const window = currentWindow();
+  audio.currentTime = Math.max(window.start, Math.min(window.end - 0.001, audio.currentTime + delta));
+  render();
+}
+async function hashFile(file) {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
+}
+function payload() {
+  return {
+    version: '0.1',
+    method: 'human-listening-tap-or-scrub',
+    sourceFile: selectedFile?.name ?? null,
+    sourceSha256,
+    windows: windows.map(window => ({ ...window,
+      annotations: [...annotations[window.id]].sort((a, b) => a.timeSeconds - b.timeSeconds) })),
+  };
+}
+function download(name, type, contents) {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([contents], { type }));
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+$('file').addEventListener('change', async event => {
+  selectedFile = event.target.files[0] ?? null;
+  if (!selectedFile) return;
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(selectedFile);
+  audio.src = objectUrl;
+  sourceSha256 = await hashFile(selectedFile);
+  if (selectedFile.name !== expectedFile || sourceSha256 !== expectedSha256) {
+    alert('This file does not match the Gate A Kit Calibration.wav asset.');
+    return;
+  }
+  if (audio.readyState < 1) await new Promise(resolve => audio.addEventListener('loadedmetadata', resolve, { once: true }));
+  loadWindow();
+});
+$('loadWindow').addEventListener('click', loadWindow);
+$('window').addEventListener('change', loadWindow);
+$('rate').addEventListener('change', () => { audio.playbackRate = Number($('rate').value); });
+$('play').addEventListener('click', togglePlayback);
+$('tap').addEventListener('click', tap);
+$('undo').addEventListener('click', undo);
+$('back').addEventListener('click', () => seek(-0.05));
+$('forward').addEventListener('click', () => seek(0.05));
+$('exportJson').addEventListener('click', () => download('drum-event-annotations-v0.1.json', 'application/json', `${JSON.stringify(payload(), null, 2)}\n`));
+$('exportCsv').addEventListener('click', () => {
+  const rows = ['window_id,label,time_seconds,window_relative_seconds'];
+  for (const window of windows) for (const item of [...annotations[window.id]].sort((a, b) => a.timeSeconds - b.timeSeconds)) {
+    rows.push(`${window.id},${window.label},${item.timeSeconds.toFixed(3)},${(item.timeSeconds - window.start).toFixed(3)}`);
+  }
+  download('drum-event-annotations-v0.1.csv', 'text/csv', `${rows.join('\n')}\n`);
+});
+audio.addEventListener('timeupdate', () => {
+  const window = currentWindow();
+  if (audio.currentTime >= window.end) { audio.pause(); audio.currentTime = window.end - 0.001; }
+  render();
+});
+document.addEventListener('keydown', event => {
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
+  if (event.code === 'Space') { event.preventDefault(); togglePlayback(); }
+  else if (event.key.toLowerCase() === 't') tap();
+  else if (event.key.toLowerCase() === 'u') undo();
+  else if (event.key === 'ArrowLeft') seek(-0.05);
+  else if (event.key === 'ArrowRight') seek(0.05);
+});
+render();
+</script>

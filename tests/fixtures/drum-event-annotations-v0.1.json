@@ -1,0 +1,73 @@
+{
+  "version": "0.1",
+  "method": "human-listening-tap-or-scrub",
+  "sourceFile": "Kit Calibration.wav",
+  "sourceSha256": "c4960207cee841517e4a95f581cdf9be6f719aeae93016513f0a483b9687e2d1",
+  "windows": [
+    {
+      "id": "kit-kick",
+      "label": "kick",
+      "start": 7.5,
+      "end": 17.5,
+      "annotations": [
+        { "timeSeconds": 7.675, "label": "kick" },
+        { "timeSeconds": 7.713, "label": "kick" },
+        { "timeSeconds": 8.183, "label": "kick" },
+        { "timeSeconds": 8.238, "label": "kick" },
+        { "timeSeconds": 8.44, "label": "kick" },
+        { "timeSeconds": 9.158, "label": "kick" },
+        { "timeSeconds": 9.198, "label": "kick" },
+        { "timeSeconds": 9.23, "label": "kick" },
+        { "timeSeconds": 9.916, "label": "kick" },
+        { "timeSeconds": 9.941, "label": "kick" },
+        { "timeSeconds": 10.046, "label": "kick" },
+        { "timeSeconds": 10.632, "label": "kick" },
+        { "timeSeconds": 10.726, "label": "kick" },
+        { "timeSeconds": 10.796, "label": "kick" },
+        { "timeSeconds": 10.848, "label": "kick" },
+        { "timeSeconds": 11.175, "label": "kick" },
+        { "timeSeconds": 11.29, "label": "kick" },
+        { "timeSeconds": 11.313, "label": "kick" },
+        { "timeSeconds": 12.246, "label": "kick" },
+        { "timeSeconds": 12.248, "label": "kick" },
+        { "timeSeconds": 13.248, "label": "kick" },
+        { "timeSeconds": 13.263, "label": "kick" },
+        { "timeSeconds": 13.748, "label": "kick" },
+        { "timeSeconds": 14.021, "label": "kick" },
+        { "timeSeconds": 14.589, "label": "kick" },
+        { "timeSeconds": 14.631, "label": "kick" },
+        { "timeSeconds": 14.838, "label": "kick" },
+        { "timeSeconds": 14.892, "label": "kick" },
+        { "timeSeconds": 15.325, "label": "kick" },
+        { "timeSeconds": 15.338, "label": "kick" },
+        { "timeSeconds": 15.798, "label": "kick" },
+        { "timeSeconds": 15.805, "label": "kick" },
+        { "timeSeconds": 16.313, "label": "kick" },
+        { "timeSeconds": 16.323, "label": "kick" },
+        { "timeSeconds": 17.306, "label": "kick" },
+        { "timeSeconds": 17.373, "label": "kick" }
+      ]
+    },
+    {
+      "id": "kit-snare",
+      "label": "snare",
+      "start": 35.5,
+      "end": 45.5,
+      "annotations": []
+    },
+    {
+      "id": "kit-hi-hat",
+      "label": "hi-hat",
+      "start": 63,
+      "end": 73,
+      "annotations": []
+    },
+    {
+      "id": "kit-tom",
+      "label": "tom",
+      "start": 85,
+      "end": 95,
+      "annotations": []
+    }
+  ]
+}
