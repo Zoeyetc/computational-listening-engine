@@ -27,9 +27,13 @@
     }
   },
   "scripts": {
-    "test": "node --test tests/*.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p evaluation/tsconfig.json",
-    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.ts services/listening-field-analysis/tests/*.test.ts",
+    "test:service": "node --test services/listening-field-analysis/tests/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p evaluation/tsconfig.json && tsc --noEmit -p adapters/listening-field/tsconfig.json && tsc --noEmit -p services/listening-field-analysis/tsconfig.json",
+    "build": "node scripts/build.mjs && node scripts/build-listening-field-service.mjs",
+    "build:service": "node scripts/build-listening-field-service.mjs",
+    "preservice:listening-field": "npm run build:service",
+    "service:listening-field": "node services/listening-field-analysis/dist/server.js",
     "prepack": "npm run check:boundaries && npm run typecheck && npm run build",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "test:evaluation": "node --test tests/Evaluation*.test.ts",
@@ -40,6 +44,12 @@
     "profile:drum-probe": "node scripts/probe-drum-evidence.mjs"
   },
   "devDependencies": {
+    "@types/busboy": "^1.5.4",
+    "@types/node": "^26.6.3",
+    "esbuild": "^0.28.2",
     "typescript": "~5.9.2"
+  },
+  "dependencies": {
+    "busboy": "^1.6.0"
   }
 }
